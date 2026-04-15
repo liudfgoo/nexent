@@ -27,7 +27,7 @@
 import json 
 import logging
 from dataclasses import dataclass, field 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 from smolagents.memory import ActionStep, TaskStep, AgentMemory, MemoryStep
 from smolagents.models import ChatMessage, MessageRole
 import hashlib
@@ -634,9 +634,7 @@ class ContextManager:
                 raw_output = str(raw_output)
             
             summary = self._format_summary(raw_output)
-            
-            self._record_llm_call_token(input=self._msg_char_count(messages), output=raw_output, response=response,call_type=call_type)
-
+            self._record_llm_call_token(input_len=self._msg_char_count(messages), output_len=len(raw_output), response=response,call_type=call_type)
             return summary
 
         except Exception as e:
@@ -679,7 +677,7 @@ class ContextManager:
             if not isinstance(raw_output, str):
                 raw_output = str(raw_output)
 
-            self._record_llm_call_token(input=self._msg_char_count(messages), output=raw_output, response=response,call_type="merge_summary")
+            self._record_llm_call_token(input_len=self._msg_char_count(messages), output_len=len(raw_output), response=response,call_type="merge_summary")
 
             return self._format_summary(raw_output)
 
@@ -687,13 +685,13 @@ class ContextManager:
             logger.error(f"摘要合并异常: {e}")
             return None
 
-    def _record_llm_call_token(self, input, output, response, call_type):
+    def _record_llm_call_token(self, input_len, output_len, response, call_type):
         record = CompressionCallRecord(
             call_type = call_type,
             input_tokens=getattr(getattr(response, "token_usage", None), "input_tokens", 0) or 0,
             output_tokens=getattr(getattr(response, "token_usage", None), "output_tokens", 0) or 0,
-            input_chars = len(input),
-            output_chars = len(output) if output else 0
+            input_chars = input_len,
+            output_chars = output_len
         )
         self.compression_calls_log.append(record)
         self._step_local_log.append(record)
@@ -774,76 +772,20 @@ class ContextManager:
         return result
 
     ######################################
-    ## 估计 Tokens              
+    ## 估计 Tokens (委托给模块级纯函数)
     ######################################
 
-
-
     def _estimate_tokens_for_steps(self, steps: MemoryStep):
-        """精确估算steps的token数"""
-        total_tokens = 0
-        for step in steps:
-            for msg in step.to_messages():
-                total_tokens += self._msg_token_count(msg)
-        return total_tokens
-
+        return estimate_tokens_for_steps(steps, self.config.chars_per_token)
 
     def _estimate_tokens(self, memory: AgentMemory) -> int:
-        """估算 memory 中当前上下文的 token 数。
- 
-        优先使用最后一个 ActionStep 的 input_tokens（它代表该步调用时的
-        完整上下文长度），再加上该步之后新增步骤的文本估算。
- 
-        注意：不能简单累加所有步骤的 input_tokens，因为每步的 input_tokens
-        已经是累积值（包含了前面所有步骤的内容）。
-        """
-        # 策略1：找最后一个有 token_usage 的 ActionStep
-        # QUESTION: 从前端传来的 history, 并依此构建出的 Actionstep没有 input_tokens的信息, 为None
-        last_known_tokens = 0
-        last_known_idx = -1
-        for i, step in enumerate(memory.steps):
-            if isinstance(step, ActionStep) and step.token_usage:
-                last_known_tokens = step.token_usage.input_tokens
-                last_known_idx = i
- 
-        if last_known_tokens > 0:
-            # 加上 last_known_idx 之后新增步骤的估算增量
-            incremental_chars = 0
-            for step in memory.steps[last_known_idx + 1:]:
-                for msg in step.to_messages():
-                    incremental_chars += self._msg_char_count(msg)
-            return last_known_tokens + int(incremental_chars / self.config.chars_per_token)
- 
-        # 策略2：完全基于字符数估算
-        total_chars = 0
-        if memory.system_prompt:
-            for msg in memory.system_prompt.to_messages():
-                total_chars += self._msg_char_count(msg)
-        for step in memory.steps:
-            for msg in step.to_messages():
-                total_chars += self._msg_char_count(msg)
-        return int(total_chars / self.config.chars_per_token)
+        return estimate_tokens(memory, self.config.chars_per_token)
 
-
-    def _msg_char_count(self, msg: ChatMessage) -> int:
-        """计算单条 ChatMessage 的字符数。"""
-        if isinstance(msg.content, str):
-            return len(msg.content)
-        if isinstance(msg.content, list):
-            count = 0
-            for block in msg.content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    count += len(block.get("text", ""))
-            return count
-        return 0
-    
+    def _msg_char_count(self, msg: Union[ChatMessage, List[ChatMessage]]) -> int:
+        return msg_char_count(msg)
 
     def _msg_token_count(self, msg):
-        """单条消息token估算"""
-        chars = self._msg_char_count(msg)
-        # 中文场景：约1.5字符/token
-        # 英文场景：约4字符/token
-        return int(chars / self.config.chars_per_token)
+        return msg_token_count(msg, self.config.chars_per_token)
 
     def get_step_compression_stats(self) -> dict:
         """返回最近一次 compress_if_needed 的汇总统计"""
@@ -868,3 +810,68 @@ class ContextManager:
             "total_output_tokens": sum(r.output_tokens for r in real_calls),
             "total_cache_hits": sum(1 for r in self.compression_calls_log if r.cache_hit),
         }
+
+
+# =============================================================================
+# 模块级纯工具函数 —— 供 ContextManager 与外部（如 CoreAgent）复用
+# =============================================================================
+
+def msg_char_count(msg: Union[ChatMessage, List[ChatMessage]]) -> int:
+    """计算单条或多条 ChatMessage 的字符总数。
+    兼容 content 为 str 或 list[{"type": "text", "text": "..."}] 的格式。
+    """
+    if isinstance(msg, list):
+        return sum(msg_char_count(single_msg) for single_msg in msg)
+
+    if isinstance(msg.content, str):
+        return len(msg.content)
+    if isinstance(msg.content, list):
+        return sum(
+            len(block.get("text", ""))
+            for block in msg.content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return 0
+
+
+def msg_token_count(msg: Union[ChatMessage, List[ChatMessage]], chars_per_token: float = 1.5) -> int:
+    """单条或多条消息 token 估算。"""
+    return int(msg_char_count(msg) / chars_per_token)
+
+
+def estimate_tokens_for_steps(steps: List[MemoryStep], chars_per_token: float = 1.5) -> int:
+    """精确估算 steps 的 token 数。"""
+    total_tokens = 0
+    for step in steps:
+        total_tokens += msg_token_count(step.to_messages(), chars_per_token)
+    return total_tokens
+
+
+def estimate_tokens(memory: AgentMemory, chars_per_token: float = 1.5) -> int:
+    """估算 memory 中当前上下文的 token 数。
+
+    优先使用最后一个 ActionStep 的 input_tokens（它代表该步调用时的
+    完整上下文长度），再加上该步之后新增步骤的文本估算。
+
+    注意：不能简单累加所有步骤的 input_tokens，因为每步的 input_tokens
+    已经是累积值（包含了前面所有步骤的内容）。
+    """
+    last_known_tokens = 0
+    last_known_idx = -1
+    for i, step in enumerate(memory.steps):
+        if isinstance(step, ActionStep) and step.token_usage:
+            last_known_tokens = step.token_usage.input_tokens
+            last_known_idx = i
+
+    if last_known_tokens > 0:
+        incremental_chars = 0
+        for step in memory.steps[last_known_idx + 1 :]:
+            incremental_chars += msg_char_count(step.to_messages())
+        return last_known_tokens + int(incremental_chars / chars_per_token)
+
+    total_chars = 0
+    if memory.system_prompt:
+        total_chars += msg_char_count(memory.system_prompt.to_messages())
+    for step in memory.steps:
+        total_chars += msg_char_count(step.to_messages())
+    return int(total_chars / chars_per_token)
