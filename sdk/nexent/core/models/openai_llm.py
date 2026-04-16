@@ -175,6 +175,13 @@ class OpenAIModel(OpenAIServerModel):
                 ChatCompletionMessage(role=role if role else "assistant",  # If there is no explicit role, default to "assistant"
                                       content=model_output).model_dump(include={"role", "content", "tool_calls"}))
 
+            from smolagents.monitoring import TokenUsage
+
+            if input_tokens > 0 or output_tokens > 0:
+                message.token_usage = TokenUsage(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens
+                )
             message.raw = current_request
             message.role = MessageRole.ASSISTANT
             return message
