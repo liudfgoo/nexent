@@ -26,6 +26,7 @@
 
 import json 
 import logging
+import threading
 from dataclasses import dataclass, field 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 from smolagents.memory import ActionStep, TaskStep, AgentMemory, MemoryStep
@@ -173,6 +174,7 @@ class ContextManager:
             self.config.keep_recent_steps = max_steps
         self.compression_calls_log: List[CompressionCallRecord] = []
         self._step_local_log: List[CompressionCallRecord] = []  # 用于临时收集单次 compress_if_needed 内的调用
+        self._lock = threading.Lock()
 
     def compress_if_needed(self, model, memory, original_messages:List[ChatMessage], current_run_start_idx) -> List[ChatMessage]:
         # 这里传入的 memory 应该是 memory 的 copy 不应该影响其原始值
@@ -182,89 +184,90 @@ class ContextManager:
         if self._estimate_tokens(memory) <= self.config.token_threshold:
             return original_messages
 
-        self._step_local_log.clear()
+        with self._lock:
+            self._step_local_log.clear()
 
-        # 阶段1：分段切分 & 分别估算
-        prev_steps = memory.steps[:current_run_start_idx] # historical steps 不包括当前run内的step
-        curr_steps = memory.steps[current_run_start_idx:] # current steps
+            # 阶段1：分段切分 & 分别估算
+            prev_steps = memory.steps[:current_run_start_idx] # historical steps 不包括当前run内的step
+            curr_steps = memory.steps[current_run_start_idx:] # current steps
 
-        prev_tokens = self._estimate_tokens_for_steps(prev_steps)
-        curr_tokens = self._estimate_tokens_for_steps(curr_steps)
+            prev_tokens = self._estimate_tokens_for_steps(prev_steps)
+            curr_tokens = self._estimate_tokens_for_steps(curr_steps)
 
-        # 阶段2：决定prev与curr的压缩
-        compress_prev, compress_curr = False, False
-        if prev_tokens > self.config.token_threshold * 0.6:
-            compress_prev = True
-        if curr_tokens > self.config.token_threshold * 0.4:
-            compress_curr = True 
-        
+            # 阶段2：决定prev与curr的压缩
+            compress_prev, compress_curr = False, False
+            if prev_tokens > self.config.token_threshold * 0.6:
+                compress_prev = True
+            if curr_tokens > self.config.token_threshold * 0.4:
+                compress_curr = True 
+            
 
 
 
-        # 阶段3：先处理 compress_prev 的情况
-        prev_summary_step = None # SummaryTaskStep or None 
-        prev_tail_steps = []
+            # 阶段3：先处理 compress_prev 的情况
+            prev_summary_step = None # SummaryTaskStep or None 
+            prev_tail_steps = []
 
-        if compress_prev:
-            prev_pairs = self._extract_pairs(prev_steps)
-            if prev_pairs:
-                keep_n = min(self.config.keep_recent_pairs, len(prev_pairs))
-                pairs_to_compress = prev_pairs[:-keep_n] if keep_n > 0 else prev_pairs 
-                pairs_to_keep = prev_pairs[-keep_n:] if keep_n > 0 else []
+            if compress_prev:
+                prev_pairs = self._extract_pairs(prev_steps)
+                if prev_pairs:
+                    keep_n = min(self.config.keep_recent_pairs, len(prev_pairs))
+                    pairs_to_compress = prev_pairs[:-keep_n] if keep_n > 0 else prev_pairs 
+                    pairs_to_keep = prev_pairs[-keep_n:] if keep_n > 0 else []
 
-                if pairs_to_compress:
-                    # 带缓存的 previous 压缩
-                    summary_text = self._compress_previous_with_cache(
-                        pairs_to_compress, model
+                    if pairs_to_compress:
+                        # 带缓存的 previous 压缩
+                        summary_text = self._compress_previous_with_cache(
+                            pairs_to_compress, model
+                        )
+                        if summary_text:
+                            prev_summary_step = SummaryTaskStep(task=summary_text)
+                            prev_tail_steps = self._pairs_to_steps(pairs_to_keep)
+
+            curr_kept_steps = curr_steps # 流向 model 的 current task + actionsteps
+            if compress_curr and curr_steps:
+
+                curr_task = curr_steps[0] if isinstance(curr_steps[0], TaskStep) else None
+                curr_action_steps = [s for s in curr_steps if isinstance(s, ActionStep)]
+
+                keep_n = min(self.config.keep_recent_steps, len(curr_action_steps))
+                # 确保 keep_n step中的tool-call与tool-response要相配对
+                if curr_steps[-keep_n].observations is not None and curr_steps[-keep_n-1].tool_calls is not None:
+                    keep_n += 1
+                actions_to_compress = curr_action_steps[:-keep_n] if keep_n > 0 else []
+                actions_to_keep = curr_action_steps[-keep_n:] if keep_n > 0 else curr_action_steps
+
+                if actions_to_compress:
+                    curr_summary_text = self._compress_current_with_cache(
+                        curr_task, actions_to_compress, model
                     )
-                    if summary_text:
-                        prev_summary_step = SummaryTaskStep(task=summary_text)
-                        prev_tail_steps = self._pairs_to_steps(pairs_to_keep)
+                    if curr_summary_text:
+                        # 这里没有明确传入 当前 task
+                        curr_kept_steps = [
+                            SummaryTaskStep(task=curr_summary_text),
+                            *actions_to_keep
+                        ]
+                    else:
+                        # 摘要失败，降级为截断版本;
+                        # 这里 先不进行截断
+                        truncated_actions = actions_to_compress
+                        curr_kept_steps = (
+                            ([curr_task] if curr_task else [])
+                            + truncated_actions + actions_to_keep
+                        )
 
-        curr_kept_steps = curr_steps # 流向 model 的 current task + actionsteps
-        if compress_curr and curr_steps:
-
-            curr_task = curr_steps[0] if isinstance(curr_steps[0], TaskStep) else None
-            curr_action_steps = [s for s in curr_steps if isinstance(s, ActionStep)]
-
-            keep_n = min(self.config.keep_recent_steps, len(curr_action_steps))
-            # 确保 keep_n step中的tool-call与tool-response要相配对
-            if curr_steps[-keep_n].observations is not None and curr_steps[-keep_n-1].tool_calls is not None:
-                keep_n += 1
-            actions_to_compress = curr_action_steps[:-keep_n] if keep_n > 0 else []
-            actions_to_keep = curr_action_steps[-keep_n:] if keep_n > 0 else curr_action_steps
-
-            if actions_to_compress:
-                curr_summary_text = self._compress_current_with_cache(
-                    curr_task, actions_to_compress, model
+            if not self._step_local_log:
+                record = CompressionCallRecord(
+                    call_type="no_op",
+                    cache_hit=True,
+                    details={"reason": "all_cache_hit_or_no_content"}
                 )
-                if curr_summary_text:
-                    # 这里没有明确传入 当前 task
-                    curr_kept_steps = [
-                        SummaryTaskStep(task=curr_summary_text),
-                        *actions_to_keep
-                    ]
-                else:
-                    # 摘要失败，降级为截断版本;
-                    # 这里 先不进行截断
-                    truncated_actions = actions_to_compress
-                    curr_kept_steps = (
-                        ([curr_task] if curr_task else [])
-                        + truncated_actions + actions_to_keep
-                    )
 
-        if not self._step_local_log:
-            record = CompressionCallRecord(
-                call_type="no_op",
-                cache_hit=True,
-                details={"reason": "all_cache_hit_or_no_content"}
+                self.compression_calls_log.append(record)
+                self._step_local_log.append(record)
+            return self._build_messages(
+                memory, prev_summary_step, prev_tail_steps, curr_kept_steps
             )
-
-            self.compression_calls_log.append(record)
-            self._step_local_log.append(record)
-        return self._build_messages(
-            memory, prev_summary_step, prev_tail_steps, curr_kept_steps
-        )
 
 
     def _extract_pairs(self, steps):
@@ -789,27 +792,29 @@ class ContextManager:
 
     def get_step_compression_stats(self) -> dict:
         """返回最近一次 compress_if_needed 的汇总统计"""
-        if not self._step_local_log:
-            return {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cache_hits": 0}
+        with self._lock:
+            if not self._step_local_log:
+                return {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cache_hits": 0}
 
-        return {
-            "calls": len([r for r in self._step_local_log if not r.cache_hit]),
-            "input_tokens": sum(r.input_tokens for r in self._step_local_log),
-            "output_tokens": sum(r.output_tokens for r in self._step_local_log),
-            "input_chars": sum(r.input_chars for r in self._step_local_log),
-            "output_chars": sum(r.output_chars for r in self._step_local_log),
-            "cache_hits": sum(1 for r in self._step_local_log if r.cache_hit),
-        }
+            return {
+                "calls": len([r for r in self._step_local_log if not r.cache_hit]),
+                "input_tokens": sum(r.input_tokens for r in self._step_local_log),
+                "output_tokens": sum(r.output_tokens for r in self._step_local_log),
+                "input_chars": sum(r.input_chars for r in self._step_local_log),
+                "output_chars": sum(r.output_chars for r in self._step_local_log),
+                "cache_hits": sum(1 for r in self._step_local_log if r.cache_hit),
+            }
 
     def get_all_compression_stats(self) -> dict:
         """返回全生命周期的汇总统计"""
-        real_calls = [r for r in self.compression_calls_log if not r.cache_hit]
-        return {
-            "total_calls": len(real_calls),
-            "total_input_tokens": sum(r.input_tokens for r in real_calls),
-            "total_output_tokens": sum(r.output_tokens for r in real_calls),
-            "total_cache_hits": sum(1 for r in self.compression_calls_log if r.cache_hit),
-        }
+        with self._lock:
+            real_calls = [r for r in self.compression_calls_log if not r.cache_hit]
+            return {
+                "total_calls": len(real_calls),
+                "total_input_tokens": sum(r.input_tokens for r in real_calls),
+                "total_output_tokens": sum(r.output_tokens for r in real_calls),
+                "total_cache_hits": sum(1 for r in self.compression_calls_log if r.cache_hit),
+            }
 
 
 # =============================================================================
