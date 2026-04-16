@@ -93,6 +93,11 @@ def agent_run_thread(agent_run_info: AgentRunInfo):
             )
             agent = nexent.create_single_agent(agent_run_info.agent_config)
             nexent.set_agent(agent)
+
+            # Reuse conversation-level ContextManager if provided
+            if getattr(agent_run_info, 'context_manager', None) is not None:
+                agent.context_manager = agent_run_info.context_manager
+
             nexent.add_history_to_agent(agent_run_info.history)
             nexent.agent_run_with_observer(
                 query=agent_run_info.query, reset=False)
@@ -111,6 +116,11 @@ def agent_run_thread(agent_run_info: AgentRunInfo):
                 )
                 agent = nexent.create_single_agent(agent_run_info.agent_config)
                 nexent.set_agent(agent)
+
+                # Reuse conversation-level ContextManager if provided
+                if getattr(agent_run_info, 'context_manager', None) is not None:
+                    agent.context_manager = agent_run_info.context_manager
+
                 nexent.add_history_to_agent(agent_run_info.history)
                 nexent.agent_run_with_observer(
                     query=agent_run_info.query, reset=False)
