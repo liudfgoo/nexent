@@ -12,6 +12,7 @@ from ..utils.constants import THINK_TAG_PATTERN, THINK_PREFIX_PATTERN
 from ..utils.observer import MessageObserver, ProcessType
 from .agent_model import AgentConfig, AgentHistory, ModelConfig, ToolConfig
 from .core_agent import CoreAgent, convert_code_format
+from .agent_context import ContextManager
 
 
 class NexentAgent:
@@ -170,6 +171,14 @@ class NexentAgent:
             )
             agent.stop_event = self.stop_event
 
+            # Mount context manager if config provided
+            ctx_config = getattr(agent_config, 'context_manager_config', None)
+            if ctx_config:
+                agent.context_manager = ContextManager(
+                    config=ctx_config,
+                    max_steps=agent_config.max_steps
+                )
+
             return agent
         except Exception as e:
             raise ValueError(f"Error in creating agent, agent name: {agent_config.name}, Error: {e}")
@@ -201,6 +210,7 @@ class NexentAgent:
                                                           timing=Timing(start_time=time.time()),
                                                           action_output=msg.content, model_output=msg.content))
 
+        self.agent._history_step_count = len(self.agent.memory.steps)
     def agent_run_with_observer(self, query: str, reset=True):
         if not isinstance(self.agent, CoreAgent):
             raise TypeError(f"agent must be a CoreAgent object, not {type(self.agent)}")
@@ -213,6 +223,22 @@ class NexentAgent:
                     continue
                 # Keep duration
                 if hasattr(step_log, "duration"):
+                    # duration = round(float(step_log.duration),2)
+                    
+                    # input_tokens = None 
+                    # output_tokens = None 
+                    # if hasattr(step_log, "token_usage") and step_log.token_usage is not None:
+                    #     input_tokens = getattr(step_log.token_usage, "input_tokens", None)
+                    #     output_tokens = getattr(step_log.token_usage, "output_tokens", None)    
+                    
+                    # observer.add_message(
+                    #     "",
+                    #     ProcessType.TOKEN_COUNT,
+                    #     str(duration),
+                    #     input_tokens=input_tokens,
+                    #     output_tokens=output_tokens
+                    # )
+                               
                     observer.add_message("", ProcessType.TOKEN_COUNT, str(round(float(step_log.duration), 2)))
 
                 if hasattr(step_log, "error") and step_log.error is not None:
@@ -242,7 +268,56 @@ class NexentAgent:
                                  content=f"Error in interaction: {str(e)}")
             raise ValueError(f"Error in interaction: {str(e)}")
 
+        finally:
+            self._log_step_metrics()
+
     def set_agent(self, agent: CoreAgent):
         if not isinstance(agent, CoreAgent):
             raise TypeError(f"agent must be a CoreAgent object, not {type(agent)}")
         self.agent = agent
+
+    def _log_step_metrics(self):
+        """将 step_metrics 输出到日志或本地文件，用于上下文管理的定量分析"""
+        if not hasattr(self.agent, "step_metrics") or not self.agent.step_metrics:
+            return
+
+        metrics = self.agent.step_metrics
+        lines = []
+        for m in metrics:
+            lines.append(
+                f"Step {m['step_number']}: "
+                f"main_i={m['main_llm']['input_tokens']} main_o={m['main_llm']['output_tokens']} | "
+                f"comp_i={m['compression']['input_tokens']} comp_o={m['compression']['output_tokens']} | "
+                f"mem_est_input={m['memory_state']['estimated_input_tokens']} |"
+                f"mem_est_output={m['memory_state']['estimated_output_tokens']}"
+            )
+
+        total_main_i = sum(m['main_llm']['input_tokens'] for m in metrics)
+        total_main_o = sum(m['main_llm']['output_tokens'] for m in metrics)
+        total_comp_i = sum(m['compression']['input_tokens'] for m in metrics)
+        total_comp_o = sum(m['compression']['output_tokens'] for m in metrics)
+        total_mem_in = sum(m['memory_state']['estimated_input_tokens'] for m in metrics)
+        total_mem_out = sum(m['memory_state']['estimated_output_tokens'] for m in metrics)
+        total_all_i = total_main_i + total_comp_i
+        total_all_o = total_main_o + total_comp_o
+
+
+        lines.append(
+            f"Total:  "
+            f"main_i={total_main_i} main_o={total_main_o} | "
+            f"comp_i={total_comp_i} comp_o={total_comp_o} | "
+            f"all_i={total_all_i} all_o={total_all_o} | "
+            f"mem_est_input={total_mem_in} |"
+            f"mem_est_output={total_mem_out}"
+        )
+        if self.agent.context_manager:
+            lines.append(f"Context Manager Global: {self.agent.context_manager.get_all_compression_stats()}")
+            
+        lines.append(
+            "-----"
+        )
+        print("\n".join(lines))
+
+        # 可选：写入本地文件
+        with open("nexent_context_metrics.log", "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
