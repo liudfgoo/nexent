@@ -1583,6 +1583,17 @@ async def prepare_agent_run(
         allow_memory_search=allow_memory_search,
         is_debug=agent_request.is_debug,
     )
+
+    # Mount conversation-level reusable ContextManager if enabled
+    cm_config = getattr(agent_run_info.agent_config, 'context_manager_config', None)
+    if cm_config and cm_config.enabled:
+        cm = agent_run_manager.get_or_create_context_manager(
+            conversation_id=str(agent_request.conversation_id),
+            config=cm_config,
+            max_steps=agent_run_info.agent_config.max_steps
+        )
+        agent_run_info.context_manager = cm
+
     agent_run_manager.register_agent_run(
         agent_request.conversation_id, agent_run_info, user_id)
     return agent_run_info, memory_context
