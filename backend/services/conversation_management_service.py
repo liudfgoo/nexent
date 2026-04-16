@@ -362,6 +362,11 @@ def delete_conversation_service(conversation_id: int, user_id: str) -> bool:
         success = delete_conversation(conversation_id, user_id)
         if not success:
             raise Exception(f"Conversation {conversation_id} does not exist or has been deleted")
+
+        # 防御性清理：释放该 conversation 关联的 ContextManager，避免极端情况下的内存泄漏
+        from backend.agents.agent_run_manager import agent_run_manager
+        agent_run_manager.clear_conversation_context_manager(conversation_id)
+
         return True
     except Exception as e:
         logging.error(f"Failed to delete conversation: {str(e)}")
