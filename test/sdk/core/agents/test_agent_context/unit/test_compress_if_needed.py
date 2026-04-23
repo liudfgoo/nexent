@@ -13,11 +13,11 @@ def _all_texts(messages):
  
 def _joined(messages):
     return " ".join(_all_texts(messages))
- 
+
 class TestCompressIfNeeded:
 
     def test_disabled_returns_original_messages(self):
-        """config.enabled=False 时直接返回 original_messages，不做任何处理"""
+        """When config.enabled=False, return original_messages directly without any processing"""
         cm = make_cm(enabled=False, threshold=10)
         # prev: [T,A]; curr: [T,A]
         n_prev_pairs = 1
@@ -29,7 +29,7 @@ class TestCompressIfNeeded:
         assert result is original
 
     def test_under_threshold_returns_original(self):
-        """raw tokens < threshold 时直接返回，不调用 LLM"""
+        """When raw tokens < threshold, return directly without calling LLM"""
         cm = make_cm(enabled=True, threshold=999999)
         n_prev_pairs = 1
         n_curr_actions = 1
@@ -42,7 +42,7 @@ class TestCompressIfNeeded:
         model.assert_not_called()
 
     def test_over_threshold_triggers_compression(self):
-        """raw tokens > threshold 时应调用 LLM（全 previous-run 场景）"""
+        """When raw tokens > threshold, LLM should be called (all previous-run scenario)"""
         keep_recent_pairs = 1
         keep_recent_steps = 2
         cm = make_cm(enabled=True, threshold=10, keep_recent_steps=keep_recent_steps, keep_recent_pairs=keep_recent_pairs)
@@ -52,9 +52,9 @@ class TestCompressIfNeeded:
         original = make_original_messages(memory)
         # system prompt + 2 * prev_pairs + curr_task + curr_actions
         assert len(original) == 1+ n_prev_pairs * 2 + 1 + n_curr_actions
-        # current_run_start_idx = len(memory.steps) 表示全部为 previous-run，current-run 为空
+        # current_run_start_idx = len(memory.steps) means all previous-run, current-run is empty
         current_run_start_idx =  2 * n_prev_pairs
-        model = make_model('{"task_overview": "摘要"}')
+        model = make_model('{"task_overview": "summary"}')
         result = cm.compress_if_needed(model, memory, original, current_run_start_idx)
         assert result is not None
         assert isinstance(result, list)
@@ -70,59 +70,59 @@ class TestCompressIfNeeded:
         assert "Summary of earlier steps" in all_text
 
     def test_run_boundary_clears_current_cache(self):
-        """切换 run（current_run_start_idx 变化）时 且确保不触发 current summary的时候，current cache 应被清空"""
+        """When switching run (current_run_start_idx changes) and ensuring current summary is not triggered, current cache should be cleared"""
         cm = make_cm(enabled=True, threshold=1)
-        # 预先设置 current cache
-        cm._current_summary_cache = CurrentSummaryCache("旧缓存", 1, "fp")
-        cm._last_run_start_idx = 5  # 上次的 idx
+        # Pre-set current cache
+        cm._current_summary_cache = CurrentSummaryCache("old_cache", 1, "fp")
+        cm._last_run_start_idx = 5  # last idx
         memory = make_memory_mixed(1,0)
         original = make_original_messages(memory)
-        model = make_model('{"task_overview": "摘要"}')
-        # 用不同的 current_run_start_idx 调用 → 触发边界检测
+        model = make_model('{"task_overview": "summary"}')
+        # Call with different current_run_start_idx -> trigger boundary detection
         try:
             cm.compress_if_needed(model, memory, original, current_run_start_idx=0)
         except Exception:
-            pass  # 这里只关心 cache 清零，不关心后续压缩是否成功
+            pass  # Only care about cache clearing here, not whether subsequent compression succeeds
         assert cm._current_summary_cache is None
 
     def test_effective_tokens_shortcut_applies_cache(self):
-        """effective tokens < threshold 时短路，直接应用已有 cache 构建消息（全 previous-run）"""
+        """When effective tokens < threshold, shortcut and directly apply existing cache to build messages (all previous-run)"""
         cm = make_cm(enabled=True, threshold=10, keep_recent_pairs=0)
-        # 两对 steps
+        # Two pairs of steps
         pairs = [make_pair(f"task{i}", f"action{i}", i) for i in range(2)]
         all_steps = []
         for t, a in pairs:
             all_steps.extend([t, a])
         all_steps.append(TaskStep(task="New Task"))
-        memory = AgentMemory(steps=all_steps, system_prompt=SystemPromptStep(system_prompt="系统提示"))
-        # 预设 prev cache（摘要非常短）
+        memory = AgentMemory(steps=all_steps, system_prompt=SystemPromptStep(system_prompt="System prompt"))
+        # Pre-set prev cache (summary is very short)
         last_t, last_a = pairs[1]
         fp = cm._pair_fingerprint(last_t.task, last_a.action_output)
-        cm._previous_summary_cache = PreviousSummaryCache("短", 2, fp)
+        cm._previous_summary_cache = PreviousSummaryCache("short", 2, fp)
 
-        model = make_model('{"task_overview": "摘要"}')
+        model = make_model('{"task_overview": "summary"}')
         original = make_original_messages(memory)
-        # 全部为 previous-run
+        # All are previous-run
         current_run_start_idx = 2 * len(pairs)
         result = cm.compress_if_needed(model, memory, original, current_run_start_idx)
-        # effective tokens 短路后 model 不应被调用（cache 直接应用）
+        # After effective tokens shortcut, model should not be called (cache applied directly)
         model.assert_not_called()
         assert isinstance(result, list)
-        # system_prompt(1) + previous 摘要(1)，current task → 共 3 条消息
+        # system_prompt(1) + previous summary(1), current task -> 3 messages in total
         assert len(result) == 3
         all_text = " ".join(
             b.get("text", "")
             for m in result for b in (m.content if isinstance(m.content, list) else [])
             if isinstance(b, dict)
         )
-        assert "短" in all_text
+        assert "short" in all_text
 
     def test_current_run_cache_full_hit_no_llm_call(self):
-        """current cache 完全命中时，current 部分应被摘要替代且不调用 LLM"""
+        """When current cache fully hits, current part should be replaced by summary and LLM should not be called"""
         cm = make_cm(enabled=True, threshold=7)
         curr_t, curr_a = make_pair("curr_task", "curr_action", 0)
         # There is no previous pairs
-        memory = AgentMemory(steps=[curr_t, curr_a], system_prompt=SystemPromptStep(system_prompt="系统提示"))
+        memory = AgentMemory(steps=[curr_t, curr_a], system_prompt=SystemPromptStep(system_prompt="System prompt"))
 
         fp = ContextManager._action_fingerprint(curr_a)
         # use very short summary, ensure effective tokens < raw tokens
@@ -131,12 +131,12 @@ class TestCompressIfNeeded:
 
         model = make_model()
         original = make_original_messages(memory)
-        # current_run_start_idx=0 means there is no previous，only current-run
+        # current_run_start_idx=0 means there is no previous, only current-run
         result = cm.compress_if_needed(model, memory, original, current_run_start_idx=0)
 
         model.assert_not_called()
         assert isinstance(result, list)
-        # system_prompt(1) + curr_task(1) + SummaryTaskStep(c)(1) → three messages
+        # system_prompt(1) + curr_task(1) + SummaryTaskStep(c)(1) -> three messages
         assert len(result) == 3
         all_text = " ".join(
             b.get("text", "")
@@ -153,7 +153,7 @@ class TestCompressIfNeeded:
         curr_t, curr_a = make_pair("curr_task", "curr_action", 1)
         memory = AgentMemory(
             steps=[prev_t, prev_a, curr_t, curr_a],
-            system_prompt=SystemPromptStep(system_prompt="系统提示"),
+            system_prompt=SystemPromptStep(system_prompt="System prompt"),
         )
 
         # should trigger compression
@@ -168,7 +168,7 @@ class TestCompressIfNeeded:
 
         model = make_model()
         original = make_original_messages(memory)
-        # the first two steps are previous-run，the last two steps are current-run
+        # the first two steps are previous-run, the last two steps are current-run
         current_run_start_idx = 2
 
         result = cm.compress_if_needed(model, memory, original, current_run_start_idx)
@@ -187,15 +187,15 @@ class TestCompressIfNeeded:
         assert cm._msg_token_count(result) < cm.config.token_threshold
 
     def test_mixed_prev_and_curr_over_threshold(self):
-        """previous + current 同时存在且都超阈值时，应分别触发压缩"""
+        """When previous + current exist simultaneously and both exceed threshold, compression should be triggered respectively"""
         cm = make_cm(enabled=True, threshold=1, keep_recent_pairs=1, keep_recent_steps=1)
-        # previous: 3 对(6 steps)  +  current: task + 3 actions(4 steps)
+        # previous: 3 pairs (6 steps) + current: task + 3 actions (4 steps)
         memory = make_memory_mixed(n_prev_pairs=3, n_curr_actions=3)
         original = make_original_messages(memory)
 
-        # 前 6 个 step 属于 previous-run，后 4 个属于 current-run
+        # First 6 steps belong to previous-run, last 4 steps belong to current-run
         current_run_start_idx = 6
-        model = make_model('{"task_overview": "摘要"}')
+        model = make_model('{"task_overview": "summary"}')
         result = cm.compress_if_needed(model, memory, original, current_run_start_idx)
 
         assert result is not None
@@ -203,7 +203,7 @@ class TestCompressIfNeeded:
         assert cm._current_summary_cache is not None 
         assert isinstance(result, list)
         assert len(result) < len(original)
-        # prev 和 curr 都会触发压缩，因此 model 至少被调用两次
+        # Both prev and curr will trigger compression, so model is called at least twice
         assert model.call_count >= 2
         all_text = " ".join(
             b.get("text", "")
@@ -211,5 +211,3 @@ class TestCompressIfNeeded:
             if isinstance(b, dict)
         )
         assert "Summary of earlier steps" in all_text
-
-
