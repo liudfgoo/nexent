@@ -12,7 +12,6 @@ import { ChatInput } from "../components/chatInput";
 import { ChatStreamFinalMessage } from "./chatStreamFinalMessage";
 import { TaskWindow } from "./taskWindow";
 import { transformMessagesToTaskMessages } from "./messageTransformer";
-import { TokenUsageIndicator } from "@/components/ui/tokenUsageIndicator";
 import { TokenMetrics } from "@/types/chat";
 
 export function ChatStreamMain({
@@ -429,16 +428,6 @@ export function ChatStreamMain({
         </Button>
       )}
 
-      {/* Token usage indicator — shown when there are messages with metrics */}
-      {latestMetrics && (
-        <div
-          className="absolute right-4 z-20"
-          style={{ bottom: `${chatInputHeight + 8}px` }}
-        >
-          <TokenUsageIndicator latestMetrics={latestMetrics} />
-        </div>
-      )}
-
       {/* Input box in non-initial mode */}
       {processedMessages.finalMessages.length > 0 && (
         <AnimatePresence mode="wait">
@@ -464,6 +453,7 @@ export function ChatStreamMain({
               onImageUpload={onImageUpload}
               selectedAgentId={selectedAgentId}
               onAgentSelect={onAgentSelect}
+              latestMetrics={latestMetrics}
             />
           </motion.div>
         </AnimatePresence>
