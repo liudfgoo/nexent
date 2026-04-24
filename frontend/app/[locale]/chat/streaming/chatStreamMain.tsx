@@ -12,6 +12,8 @@ import { ChatInput } from "../components/chatInput";
 import { ChatStreamFinalMessage } from "./chatStreamFinalMessage";
 import { TaskWindow } from "./taskWindow";
 import { transformMessagesToTaskMessages } from "./messageTransformer";
+import { TokenUsageIndicator } from "@/components/ui/tokenUsageIndicator";
+import { TokenMetrics } from "@/types/chat";
 
 export function ChatStreamMain({
   messages,
@@ -98,6 +100,19 @@ export function ChatStreamMain({
       taskMessages: taskMsgs,
       conversationGroups: conversationGroups,
     };
+  }, [messages]);
+
+  // Extract latest token metrics from the most recent assistant step
+  const latestMetrics = useMemo<TokenMetrics | null>(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role === MESSAGE_ROLES.ASSISTANT && msg.steps?.length) {
+        for (let j = msg.steps.length - 1; j >= 0; j--) {
+          if (msg.steps[j].metrics) return msg.steps[j].metrics;
+        }
+      }
+    }
+    return null;
   }, [messages]);
 
   // Monitor ChatInput height changes
@@ -412,6 +427,16 @@ export function ChatStreamMain({
         >
           <ChevronDown className="h-4 w-4" />
         </Button>
+      )}
+
+      {/* Token usage indicator — shown when there are messages with metrics */}
+      {latestMetrics && (
+        <div
+          className="absolute right-4 z-20"
+          style={{ bottom: `${chatInputHeight + 8}px` }}
+        >
+          <TokenUsageIndicator latestMetrics={latestMetrics} />
+        </div>
       )}
 
       {/* Input box in non-initial mode */}

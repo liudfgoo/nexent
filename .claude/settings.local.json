@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -A 30 \"class UserTokenUsageLog\\\\|__tablename__ = \\\\\"user_token_usage_log_t\\\\\"\" C:\\\\\\\\Users\\\\\\\\18270\\\\\\\\workspace\\\\\\\\nexent\\\\\\\\backend\\\\\\\\database\\\\\\\\db_models.py)",
+      "Bash(xargs grep *)",
+      "Bash(find /c/Users/18270/workspace/nexent -name \"*.py\" -type f -exec grep -l \"class ActionStep\" {} \\\\;)",
+      "Bash(python3 -c \"from smolagents.memory import ActionStep; import inspect; print\\(inspect.signature\\(ActionStep.__init__\\)\\)\")"
+    ]
+  }
+}

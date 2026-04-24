@@ -3,6 +3,16 @@ import { MESSAGE_ROLES } from "@/const/chatConfig";
 
 export type MessageRole = typeof MESSAGE_ROLES[keyof typeof MESSAGE_ROLES];
 
+// Token metrics emitted per agent step via TOKEN_COUNT SSE event
+export interface TokenMetrics {
+  duration: number
+  step_input_tokens: number | null
+  step_output_tokens: number | null
+  total_output_tokens: number
+  estimated_context_tokens: number | null
+  token_threshold: number | null
+}
+
 // Step related types
 export interface StepSection {
   content: string
@@ -42,7 +52,7 @@ export interface AgentStep {
   title: string
   content: string
   expanded: boolean
-  metrics: string
+  metrics: TokenMetrics | null
   // Support for both formats
   thinking: StepSection
   code: StepSection

@@ -86,7 +86,7 @@ export const handleStreamResponse = async (
     content: "",
     expanded: true,
     contents: [],
-    metrics: "",
+    metrics: null,
     thinking: { content: "", expanded: true },
     code: { content: "", expanded: true },
     output: { content: "", expanded: true },
@@ -200,7 +200,7 @@ export const handleStreamResponse = async (
                     content: "",
                     expanded: true,
                     contents: [], // Use an array to store all content in order
-                    metrics: "",
+                    metrics: null,
                     thinking: { content: "", expanded: true },
                     code: { content: "", expanded: true },
                     output: { content: "", expanded: true },
@@ -214,8 +214,11 @@ export const handleStreamResponse = async (
                   break;
 
                 case chatConfig.messageTypes.TOKEN_COUNT:
-                  // Process token counting logic
-                  currentStep.metrics = messageContent;
+                  try {
+                    currentStep.metrics = JSON.parse(messageContent);
+                  } catch {
+                    currentStep.metrics = null;
+                  }
                   break;
 
                 case chatConfig.messageTypes.MODEL_OUTPUT:
@@ -231,7 +234,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true },
@@ -275,7 +278,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true },
@@ -322,7 +325,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true },
@@ -370,7 +373,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true },
@@ -481,7 +484,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true },
@@ -549,7 +552,7 @@ export const handleStreamResponse = async (
                           content: "",
                           expanded: true,
                           contents: [],
-                          metrics: "",
+                          metrics: null,
                           thinking: { content: "", expanded: true },
                           code: { content: "", expanded: true },
                           output: { content: "", expanded: true },
@@ -669,7 +672,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true },
@@ -710,7 +713,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true },
@@ -743,7 +746,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true },
@@ -773,7 +776,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true },
@@ -842,7 +845,7 @@ export const handleStreamResponse = async (
                       content: "",
                       expanded: true,
                       contents: [],
-                      metrics: "",
+                      metrics: null,
                       thinking: { content: "", expanded: true },
                       code: { content: "", expanded: true },
                       output: { content: "", expanded: true }
