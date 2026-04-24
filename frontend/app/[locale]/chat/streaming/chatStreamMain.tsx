@@ -356,6 +356,7 @@ export function ChatStreamMain({
                         onImageUpload={onImageUpload}
                         selectedAgentId={selectedAgentId}
                         onAgentSelect={onAgentSelect}
+                        latestMetrics={latestMetrics}
                       />
                     </motion.div>
                   </AnimatePresence>

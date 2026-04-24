@@ -1,0 +1,9 @@
+Step 1: main_i=2291 main_o=54 | comp_i=0 comp_o=0 | mem_est_input=2897 |mem_est_output=88
+Total:  main_i=2291 main_o=54 | comp_i=0 comp_o=0 | all_i=2291 all_o=54 | mem_est_input=2897 |mem_est_output=88
+-----
+Step 1: main_i=1422 main_o=48 | comp_i=0 comp_o=0 | mem_est_input=1807 |mem_est_output=69
+Total:  main_i=1422 main_o=48 | comp_i=0 comp_o=0 | all_i=1422 all_o=48 | mem_est_input=1807 |mem_est_output=69
+-----
+Step 1: main_i=1486 main_o=444 | comp_i=0 comp_o=0 | mem_est_input=1891 |mem_est_output=555
+Total:  main_i=1486 main_o=444 | comp_i=0 comp_o=0 | all_i=1486 all_o=444 | mem_est_input=1891 |mem_est_output=555
+-----

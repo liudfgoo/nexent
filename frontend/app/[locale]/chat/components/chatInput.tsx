@@ -1030,9 +1030,7 @@ export function ChatInput({
 
         <div className="absolute right-3 top-[40%] -translate-y-1/2 flex items-center space-x-1">
           {/* Token usage indicator */}
-          {latestMetrics && (
-            <TokenUsageIndicator latestMetrics={latestMetrics} />
-          )}
+          <TokenUsageIndicator latestMetrics={latestMetrics} />
           {/* Voice to text button */}
           <Tooltip
             title={
