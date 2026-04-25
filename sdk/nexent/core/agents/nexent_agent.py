@@ -375,42 +375,85 @@ class NexentAgent:
             return
 
         metrics = self.agent.step_metrics
+
+        # 预收集所有数值
+        real_i_vals = [m['main_llm']['input_tokens'] for m in metrics]
+        real_o_vals = [m['main_llm']['output_tokens'] for m in metrics]
+        comp_i_vals = [m['compression']['input_tokens'] for m in metrics]
+        comp_o_vals = [m['compression']['output_tokens'] for m in metrics]
+        est_i_vals  = [m['memory_state']['estimated_input_tokens'] for m in metrics]
+        est_o_vals  = [m['memory_state']['estimated_output_tokens'] for m in metrics]
+        raw_i_vals  = [m['uncompressed_mem_est_input'] for m in metrics]
+        save_vals   = [f"{m['compression_ratio']}%" for m in metrics]
+        hit_vals    = [str(m['cache_hit']) for m in metrics]
+
+        # Total 汇总
+        total_ri   = sum(real_i_vals)
+        total_ro   = sum(real_o_vals)
+        total_ci   = sum(comp_i_vals)
+        total_co   = sum(comp_o_vals)
+        total_ei   = sum(est_i_vals)
+        total_eo   = sum(est_o_vals)
+        total_raw  = sum(raw_i_vals)
+        hit_count  = sum(1 for m in metrics if m['cache_hit'])
+
+        if total_raw > 0:
+            total_save_str = f"{round((1 - total_ei / total_raw) * 100, 1)}%"
+        else:
+            total_save_str = "—"
+        hit_total_str = f"{hit_count}/{len(metrics)}"
+
+        # 分组独立宽度 —— 仅由数值的最大宽度决定，不再考虑标签
+        def _val_width(vals, extra_val=None):
+            w = 0
+            for v in vals:
+                w = max(w, len(str(v)))
+            if extra_val is not None:
+                w = max(w, len(str(extra_val)))
+            return w
+
+        w_ri   = _val_width(real_i_vals, total_ri)
+        w_ro   = _val_width(real_o_vals, total_ro)
+        w_ci   = _val_width(comp_i_vals, total_ci)
+        w_co   = _val_width(comp_o_vals, total_co)
+        w_ei   = _val_width(est_i_vals, total_ei)
+        w_eo   = _val_width(est_o_vals, total_eo)
+        w_raw  = _val_width(raw_i_vals, total_raw)
+        w_save = _val_width(save_vals, total_save_str)
+        w_hit  = _val_width(hit_vals, hit_total_str)
+
+        # 前缀
+        max_step_digits = max(len(str(m['step_number'])) for m in metrics)
+        step_prefix_fmt = f"Step {{:>{max_step_digits}}}:  "
+        total_prefix = "Total:  " + " " * max_step_digits
+
         lines = []
-        for m in metrics:
+        for i, m in enumerate(metrics):
             lines.append(
-                f"Step {m['step_number']}: "
-                f"main_i={m['main_llm']['input_tokens']} main_o={m['main_llm']['output_tokens']} | "
-                f"comp_i={m['compression']['input_tokens']} comp_o={m['compression']['output_tokens']} | "
-                f"mem_est_input={m['memory_state']['estimated_input_tokens']} |"
-                f"mem_est_output={m['memory_state']['estimated_output_tokens']}"
+                step_prefix_fmt.format(m['step_number']) +
+                f"real_i={real_i_vals[i]:>{w_ri}}  real_o={real_o_vals[i]:>{w_ro}} | "
+                f"comp_i={comp_i_vals[i]:>{w_ci}}  comp_o={comp_o_vals[i]:>{w_co}} | "
+                f"est_i={est_i_vals[i]:>{w_ei}}  est_o={est_o_vals[i]:>{w_eo}} | "
+                f"est_raw_i={raw_i_vals[i]:>{w_raw}}  save={save_vals[i]:>{w_save}} | "
+                f"hit={hit_vals[i]:>{w_hit}}"
             )
 
-        total_main_i = sum(m['main_llm']['input_tokens'] for m in metrics)
-        total_main_o = sum(m['main_llm']['output_tokens'] for m in metrics)
-        total_comp_i = sum(m['compression']['input_tokens'] for m in metrics)
-        total_comp_o = sum(m['compression']['output_tokens'] for m in metrics)
-        total_mem_in = sum(m['memory_state']['estimated_input_tokens'] for m in metrics)
-        total_mem_out = sum(m['memory_state']['estimated_output_tokens'] for m in metrics)
-        total_all_i = total_main_i + total_comp_i
-        total_all_o = total_main_o + total_comp_o
-
-
         lines.append(
-            f"Total:  "
-            f"main_i={total_main_i} main_o={total_main_o} | "
-            f"comp_i={total_comp_i} comp_o={total_comp_o} | "
-            f"all_i={total_all_i} all_o={total_all_o} | "
-            f"mem_est_input={total_mem_in} |"
-            f"mem_est_output={total_mem_out}"
+            total_prefix +
+            f"real_i={total_ri:>{w_ri}}  real_o={total_ro:>{w_ro}} | "
+            f"comp_i={total_ci:>{w_ci}}  comp_o={total_co:>{w_co}} | "
+            f"est_i={total_ei:>{w_ei}}  est_o={total_eo:>{w_eo}} | "
+            f"est_raw_i={total_raw:>{w_raw}}  save={total_save_str:>{w_save}} | "
+            f"hit={hit_total_str:>{w_hit}}"
         )
+
         if self.agent.context_manager:
-            lines.append(f"Context Manager Global: {self.agent.context_manager.get_all_compression_stats()}")
-            
-        lines.append(
-            "-----"
-        )
+            lines.append(
+                f"Context Manager Global: {self.agent.context_manager.get_all_compression_stats()}"
+            )
+
+        lines.append("-----")
         print("\n".join(lines))
 
-        # 可选：写入本地文件
         with open("nexent_context_metrics.log", "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
