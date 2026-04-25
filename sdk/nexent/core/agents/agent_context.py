@@ -327,7 +327,7 @@ class ContextManager:
                             )
 
                 record = CompressionCallRecord(
-                    call_type="no_op", cache_hit=True,
+                    call_type="stable_bypass", cache_hit=True,
                     details={"reason": "stable_period_effective_under_threshold"},
                 )
                 self.compression_calls_log.append(record)
@@ -466,6 +466,12 @@ class ContextManager:
                 anchor_t.task or "", self._action_content(anchor_a)
             )
             if fp == cache.anchor_fingerprint:
+                record = CompressionCallRecord(
+                    call_type="previous_cache_hit", cache_hit=True,
+                    details={"covered_pairs": cache.covered_pairs},
+                )
+                self.compression_calls_log.append(record)
+                self._step_local_log.append(record)
                 return cache.summary_text
 
         # ===== Incremental Compression Path =====
@@ -546,8 +552,11 @@ class ContextManager:
             trimmed_pairs = self._trim_pairs_to_budget(
                 pairs, self.config.max_summary_input_tokens, keep_first=False
             )
-            target_text = self._pairs_to_text(trimmed_pairs)
-        
+            target_text = self._render_steps_with_truncation(
+                trimmed_pairs, fmt="pair", 
+                max_tokens=self.config.max_summary_input_tokens,
+                task_budget_chars=800, action_budget_chars=1500
+            )        
         summary_text = self._generate_summary(target_text, model, call_type="previous_summary")
         if summary_text:
             return summary_text, True 
@@ -555,7 +564,7 @@ class ContextManager:
         
         # L3
         reduced_pairs = self._trim_pairs_to_budget(pairs, self.config.max_summary_reduce_tokens, False)
-        reduced_text = "Truncated: " + self._pairs_to_text(reduced_pairs)
+        reduced_text = "Truncated: " + self._render_steps_with_truncation(reduced_pairs,fmt="pair",max_tokens=self.config.max_summary_reduce_tokens)
         return reduced_text, False
 
 
@@ -572,20 +581,26 @@ class ContextManager:
         current_last_fp = self._action_fingerprint(actions_to_compress[-1])
         task_text = f"当前任务: {curr_task.task}\n\n" if curr_task else ""
         cache = self._current_summary_cache
-        # 1) 完整 cache 命中
+        # 1) cache hit completely
         if cache is not None and cache.end_steps == len(actions_to_compress):
             if cache.anchor_fingerprint == current_last_fp:
+                record = CompressionCallRecord(
+                    call_type="current_cache_hit", cache_hit=True,
+                    details={"end_steps": cache.end_steps},
+                )
+                self.compression_calls_log.append(record)
+                self._step_local_log.append(record)
                 return cache.summary_text
             
-        # 2) 增量压缩
+        # 2) Incremental Compression: old current_summary_cache + New Added steps
         if cache is not None and 0 < cache.end_steps < len(actions_to_compress):
             anchor_action = actions_to_compress[cache.end_steps - 1]
             if self._action_fingerprint(anchor_action) == cache.anchor_fingerprint:
                 old_summary = cache.summary_text
                 new_actions = actions_to_compress[cache.end_steps:]
                 incremental_input = (
-                    f"## 此前步骤摘要\n{old_summary}\n\n"
-                    f"## 新增步骤\n{task_text}{self._actions_to_text(new_actions)}"
+                    f"## Summary of previous Steps\n{old_summary}\n\n"
+                    f"## New Added Steps\n{task_text}{self._actions_to_text(new_actions)}"
                 )
                 input_tokens = self._estimate_text_tokens(incremental_input)
                 if input_tokens <= self.config.max_summary_input_tokens:
@@ -617,8 +632,8 @@ class ContextManager:
             )
 
         # In current phase, there may be oversized monolithic payload
-        full_text = task_text + self._actions_to_text_with_limit(safe_actions,prefill_tokens=self._estimate_text_tokens(task_text))
-        full_text = task_text + self._actions_to_text(safe_actions)
+        actions_budget = max(0, self.config.max_summary_input_tokens - self._estimate_text_tokens(task_text))
+        full_text = task_text + self._render_steps_with_truncation(safe_actions, fmt="action", max_tokens=actions_budget)
         summary_text = self._generate_summary(full_text, model, call_type="current_summary")
         if summary_text:
             self._current_summary_cache = CurrentSummaryCache(
@@ -627,9 +642,11 @@ class ContextManager:
                 anchor_fingerprint=current_last_fp,
             )
             return summary_text
+        # summary failed
         else:
             reduced_actions = self._trim_actions_to_budget(actions_to_compress, task_text, self.config.max_summary_reduce_tokens)
-            reduced_text = "Truncated action steps: " + self._actions_to_text(reduced_actions)[self.config.max_summary_reduce_tokens:]
+            actions_text = self._render_steps_with_truncation(reduced_actions, fmt="action", max_tokens = self.config.max_summary_reduce_tokens)
+            reduced_text = "Truncated action steps: " + actions_text
             return reduced_text
 
     def _actions_to_text(self, actions: List[ActionStep]) -> str:
@@ -639,37 +656,74 @@ class ContextManager:
             parts.append(f"[步骤 {step.step_number or i+1}]\n{text}")
         return "\n\n".join(parts)
 
-    def _actions_to_text_with_limit(self, actions: List[ActionStep], prefill_tokens: int = 0) -> str:
-        rendered_steps = []
-        for i, step in enumerate(actions):
-            prefix = f"[步骤 {step.step_number or i+1}]\n"
-            content = self._render_action_step(step)
-            rendered_steps.append((prefix, content))
-        budget_per_action = self.config.max_memory_step_length
+    def _render_steps_with_truncation(
+        self,
+        steps: List[Any],                      # ActionStep or (TaskStep, ActionStep)
+        fmt: str = "action",
+        max_tokens: int = None,
+        min_budget_chars: int = 80,
+        task_budget_chars: int = 800,          # Maximum characters for task part
+        action_budget_chars: int = None,       # Defaults to max_memory_step_length
+    ) -> str:
+        if max_tokens is None:
+            max_tokens = self.config.max_summary_input_tokens
+        if action_budget_chars is None:
+            action_budget_chars = self.config.max_memory_step_length
+
+        #  Generate raw text segments for each step (split into task segment and action segment)
+        entries = []
+        for step in steps:
+            if fmt == "action":
+                # Only action, no independent task
+                text = f"[Step {step.step_number or '?'}]\n{self._render_action_step(step)}"
+                entries.append(("", text))  # (task_text, action_text)，task is None
+            else:  # pair
+                task_step, action_step = step
+                task_str = f"user: {task_step.task or ''}\nassistant: "
+                action_str = self._render_action_step(action_step)
+                entries.append((task_str, action_str))
+
+        raw_text = "\n\n".join(task + action for task, action in entries)
+        if self._estimate_text_tokens(raw_text) <= max_tokens:
+            return raw_text
+        
+        # Define truncation helper function: keep beginning + truncation marker
+        def truncate(text: str, max_len: int, mark="...[Truncated]"):
+            if len(text) <= max_len:
+                return text
+            return text[:max_len - len(mark)] + mark
+
+        # Iteratively reduce both budgets until total token count meets the requirement
+        t_budget = task_budget_chars
+        a_budget = action_budget_chars
 
         while True:
-            parts = [] 
-            
-            for prefix, content in rendered_steps:
-                if len(content) > budget_per_action:
-                    text = f"{prefix}{content[:budget_per_action]}\n\n[System Note: 该步骤内容过长，已被部分截断]"
+            parts = []
+            for task_str, action_str in entries:
+                # task 部分截断（如果有）
+                if task_str:
+                    task_trunc = truncate(task_str, t_budget)
                 else:
-                    text = f"{prefix}{content}"
-                parts.append(text)
-                
+                    task_trunc = ""
+                # action 部分截断
+                action_trunc = truncate(action_str, a_budget)
+                parts.append(task_trunc + action_trunc)
+
             all_text = "\n\n".join(parts)
 
-            if self._estimate_text_tokens(all_text) + prefill_tokens <= self.config.max_summary_input_tokens:
-                break 
-            budget_per_action = int(budget_per_action * 0.9)
-            
-            if budget_per_action < 50:
-                logger.warning(
-                    f"Per-step compression budget has reached minimum threshold "
-                    f"(budget={budget_per_action}), possibly due to excessively long preset prompts. "
-                    f"Forcing return of truncated result."
-                )
+            if self._estimate_text_tokens(all_text) <= max_tokens:
                 break
+
+            # Reduce budget: prioritize reducing the action budget, then the task budget
+
+            if a_budget > min_budget_chars:
+                a_budget = max(min_budget_chars, int(a_budget * 0.8))
+            elif t_budget > min_budget_chars:
+                t_budget = max(min_budget_chars, int(t_budget * 0.8))
+            else:
+                # Edge case: all parts are compressed to the minimum
+                break
+
         return all_text
 
     @staticmethod
@@ -847,14 +901,19 @@ class ContextManager:
     def get_step_compression_stats(self) -> dict:
         with self._lock:
             if not self._step_local_log:
-                return {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cache_hits": 0}
+                return {
+                    "calls": 0, "input_tokens": 0, "output_tokens": 0,
+                    "cache_hits": 0, "cache_types": [],
+                }
+            cache_hits = [r for r in self._step_local_log if r.cache_hit]
             return {
                 "calls": len([r for r in self._step_local_log if not r.cache_hit]),
                 "input_tokens": sum(r.input_tokens for r in self._step_local_log),
                 "output_tokens": sum(r.output_tokens for r in self._step_local_log),
                 "input_chars": sum(r.input_chars for r in self._step_local_log),
                 "output_chars": sum(r.output_chars for r in self._step_local_log),
-                "cache_hits": sum(1 for r in self._step_local_log if r.cache_hit),
+                "cache_hits": len(cache_hits),
+                "cache_types": [r.call_type for r in cache_hits],
             }
 
     def get_all_compression_stats(self) -> dict:
