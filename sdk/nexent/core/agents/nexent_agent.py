@@ -314,40 +314,43 @@ class NexentAgent:
         try:
             for step_log in self.agent.run(query, stream=True, reset=reset):
                 # Add content to observer
+                print(f"DEBUG step_log type: {type(step_log)}")
                 if not isinstance(step_log, ActionStep):
                     continue
                 # Emit token stats after each action step
-                if hasattr(step_log, "duration"):
-                    step_input = None
-                    step_output = None
-                    if hasattr(step_log, "token_usage") and step_log.token_usage is not None:
-                        step_input = getattr(step_log.token_usage, "input_tokens", None)
-                        step_output = getattr(step_log.token_usage, "output_tokens", None)
-                    if step_output:
-                        total_output_tokens += step_output
+                step_duration = getattr(step_log.timing, "duration", None)
+                step_input = None
+                step_output = None
+                if hasattr(step_log, "token_usage") and step_log.token_usage is not None:
+                    step_input = getattr(step_log.token_usage, "input_tokens", None)
+                    step_output = getattr(step_log.token_usage, "output_tokens", None)
+                if step_output:
+                    total_output_tokens += step_output
 
-                    estimated_context = None
-                    if hasattr(self.agent, "step_metrics") and self.agent.step_metrics:
-                        estimated_context = self.agent.step_metrics[-1].get(
-                            "memory_state", {}
-                        ).get("estimated_input_tokens")
+                estimated_context = None
+                if hasattr(self.agent, "step_metrics") and self.agent.step_metrics:
+                    estimated_context = self.agent.step_metrics[-1].get(
+                        "memory_state", {}
+                    ).get("estimated_input_tokens")
 
-                    token_threshold = None
-                    if (
-                        hasattr(self.agent, "context_manager")
-                        and self.agent.context_manager is not None
-                    ):
-                        token_threshold = self.agent.context_manager.config.token_threshold
+                token_threshold = None
+                if (
+                    hasattr(self.agent, "context_manager")
+                    and self.agent.context_manager is not None
+                ):
+                    token_threshold = self.agent.context_manager.config.token_threshold
 
-                    token_data = {
-                        "duration": round(float(step_log.duration), 2),
-                        "step_input_tokens": step_input,
-                        "step_output_tokens": step_output,
-                        "total_output_tokens": total_output_tokens,
-                        "estimated_context_tokens": estimated_context,
-                        "token_threshold": token_threshold,
-                    }
-                    observer.add_message("", ProcessType.TOKEN_COUNT, json.dumps(token_data))
+                token_data = {
+                    "step_number": step_log.step_number,
+                    "duration": round(float(step_duration), 2) if step_duration is not None else 0.0,
+                    "step_input_tokens": step_input,
+                    "step_output_tokens": step_output,
+                    "total_output_tokens": total_output_tokens,
+                    "estimated_context_tokens": estimated_context,
+                    "token_threshold": token_threshold,
+                }
+                print(f"Step {step_log.step_number} token data: {token_data}")
+                observer.add_message("", ProcessType.TOKEN_COUNT, json.dumps(token_data))
 
                 if hasattr(step_log, "error") and step_log.error is not None:
                     observer.add_message("", ProcessType.ERROR, str(step_log.error))

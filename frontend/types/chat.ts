@@ -5,6 +5,7 @@ export type MessageRole = typeof MESSAGE_ROLES[keyof typeof MESSAGE_ROLES];
 
 // Token metrics emitted per agent step via TOKEN_COUNT SSE event
 export interface TokenMetrics {
+  step_number: number
   duration: number
   step_input_tokens: number | null
   step_output_tokens: number | null
