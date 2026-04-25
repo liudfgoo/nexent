@@ -403,9 +403,6 @@ async def create_agent_config(
         model_name = "main_model"
     cm_config = ContextManagerConfig(
         enabled=True,
-        token_threshold=120000,
-        keep_recent_steps=4,
-        keep_recent_pairs=2,
     )
     agent_config = AgentConfig(
         name="undefined" if agent_info["name"] is None else agent_info["name"],
