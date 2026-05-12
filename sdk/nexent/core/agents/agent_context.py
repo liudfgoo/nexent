@@ -6,20 +6,18 @@ supporting incremental summarization with cache-based optimization.
 
 import hashlib
 import json
+import uuid
 import logging
 import re
 import threading
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from smolagents.memory import ActionStep, AgentMemory, MemoryStep, TaskStep
 from smolagents.models import ChatMessage, MessageRole
 
 from .summary_cache import CompressionCallRecord, CurrentSummaryCache, PreviousSummaryCache
 from .summary_config import ContextManagerConfig
-
-logger = logging.getLogger("agent_context")
-
 from ..utils.token_estimation import (
     _extract_text_from_messages,
     estimate_tokens,
@@ -29,16 +27,246 @@ from ..utils.token_estimation import (
     estimate_tokens_for_system_prompt
 )
 
+logger = logging.getLogger("agent_context")
+
+
+class OffloadStore:
+    """In-memory store for offloaded step content, keyed by UUID handle."""
+
+    def __init__(self, max_entries: int = 200):
+        self._store: Dict[str, str] = {}
+        self._max_entries = max_entries
+        self._lock = threading.Lock()
+
+    def store(self, content: str) -> str:
+        """Store content and return a UUID handle for later retrieval."""
+        handle = uuid.uuid4().hex
+        with self._lock:
+            if len(self._store) >= self._max_entries:
+                oldest = next(iter(self._store))
+                del self._store[oldest]
+            self._store[handle] = content
+        return handle
+
+    def reload(self, handle: str) -> Optional[str]:
+        """Retrieve offloaded content by handle. Returns None if not found."""
+        with self._lock:
+            return self._store.get(handle)
+
+    def clear(self) -> None:
+        """Clear all offloaded content."""
+        with self._lock:
+            self._store.clear()
+
 
 @dataclass
 class SummaryTaskStep(TaskStep):
     """TaskStep subclass that contains a compressed summary of earlier steps."""
     is_summary: bool = True
+    is_fallback: bool = False
     prefix: str = "Summary of earlier steps in this task:"  # default prefix
 
     def to_messages(self, summary_mode: bool = False) -> list:
         content = [{"type": "text", "text": f"{self.prefix}:\n{self.task}"}]
         return [ChatMessage(role=MessageRole.USER, content=content)]
+
+
+# ============================================================
+#  Standalone utilities (no ContextManager state required)
+# ============================================================
+
+def format_summary_output(raw_output: str) -> Optional[str]:
+    """Clean and validate LLM summary output.
+
+    Strips markdown code fences, attempts JSON parse for normalization,
+    falls back to plain text if not valid JSON.
+    """
+    cleaned = raw_output.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+    if not cleaned:
+        return None
+    try:
+        parsed = json.loads(cleaned)
+        return json.dumps(parsed, ensure_ascii=False, indent=2)
+    except json.JSONDecodeError:
+        logger.warning("Summary output is not valid JSON; using as plain text")
+        return cleaned
+
+
+def _is_context_length_error(err: Exception) -> bool:
+    """Check if an exception indicates a context length / token limit error."""
+    msg = str(err).lower()
+    return any(k in msg for k in (
+        "context_length", "context length", "maximum context", "maximum context length",
+        "prompt is too long", "reduce the length", "too many tokens",
+        "token limit", "exceeds the maximum", "input is too long",
+        "input length", "exceeds context", "context window",
+    ))
+
+
+def compress_history_offline(
+    pairs: List[Tuple[str, str]],
+    model,
+    config: Optional[ContextManagerConfig] = None,
+    previous_summary: Optional[str] = None,
+) -> dict:
+    """Compress conversation history offline, without ContextManager or AgentMemory.
+
+    This is a standalone function for **Static Compression Inspection** in
+    benchmarks. It takes plain-text (user, assistant) pairs and produces a
+    summary using the same prompts and schema as the in-agent compression path,
+    but without any stateful cache, offload store, or agent runtime.
+
+    Args:
+        pairs: List of (user_text, assistant_text) tuples representing
+               conversation turns to compress.
+        model: An LLM model object compatible with smolagents' call interface.
+        config: ContextManagerConfig providing prompts, schema, and token budgets.
+                Defaults to a fresh ContextManagerConfig() if not provided.
+        previous_summary: Optional existing summary text for incremental
+                          compression. If provided, uses the incremental prompt
+                          to update rather than create from scratch.
+
+    Returns:
+        dict with:
+          - "summary": the compressed summary text (str or None on failure)
+          - "is_incremental": whether incremental compression was used
+          - "is_fallback": whether the LLM failed and fallback truncation was used
+          - "input_text": the raw text that was fed to the LLM (for debugging)
+          - "input_chars": character count of the input text
+    """
+    config = config or ContextManagerConfig()
+
+    if not pairs and not previous_summary:
+        return {
+            "summary": None,
+            "is_incremental": False,
+            "is_fallback": False,
+            "input_text": "",
+            "input_chars": 0,
+        }
+
+    # Build input text from pairs
+    parts = []
+    for user_text, assistant_text in pairs:
+        parts.append(f"user: {user_text}\nassistant: {assistant_text}")
+    pairs_text = "\n\n".join(parts)
+
+    # Determine compression mode
+    is_incremental = previous_summary is not None
+
+    if is_incremental:
+        input_text = (
+            f"## Previous Summary\n{previous_summary}\n\n"
+            f"## New Conversations\n{pairs_text}"
+        )
+    else:
+        input_text = pairs_text
+
+    # Truncate if exceeds budget
+    from ..utils.token_estimation import estimate_tokens_text
+    input_tokens = estimate_tokens_text(input_text)
+    if input_tokens > config.max_summary_input_tokens:
+        # Simple tail-truncation for offline mode
+        approx_chars = int(config.max_summary_input_tokens * config.chars_per_token * 0.9)
+        input_text = "...[Earlier content truncated]...\n" + input_text[-approx_chars:]
+
+    # Build prompt
+    schema_desc = json.dumps(config.summary_json_schema, ensure_ascii=False, indent=2)
+    if is_incremental:
+        system_prompt = config.incremental_summary_system_prompt
+        user_prompt = (
+            f"Update the summary following this JSON structure:\n{schema_desc}\n\n"
+            f"{input_text}"
+        )
+    else:
+        system_prompt = config.summary_system_prompt
+        user_prompt = (
+            f"Create a structured checkpoint summary following this JSON structure:\n{schema_desc}\n\n"
+            f"TURNS TO SUMMARIZE:\n{input_text}"
+        )
+
+    messages = [
+        ChatMessage(role=MessageRole.SYSTEM,
+                    content=[{"type": "text", "text": system_prompt}]),
+        ChatMessage(role=MessageRole.USER,
+                    content=[{"type": "text", "text": user_prompt}]),
+    ]
+
+    # Call LLM with error handling
+    is_fallback = False
+    summary = None
+
+    try:
+        response = model(messages, stop_sequences=[])
+        raw_output = response.content
+        if isinstance(raw_output, list):
+            raw_output = " ".join(
+                block.get("text", "")
+                for block in raw_output
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        if not isinstance(raw_output, str):
+            raw_output = str(raw_output)
+        summary = format_summary_output(raw_output)
+    except Exception as e:
+        if _is_context_length_error(e):
+            logger.warning("Offline compression exceeds context limit; retrying with 2/3 budget")
+            approx_chars = int(config.max_summary_input_tokens * config.chars_per_token * 0.6)
+            truncated_input = input_text[-approx_chars:] if len(input_text) > approx_chars else input_text
+            if is_incremental:
+                user_prompt = (
+                    f"Update the summary following this JSON structure:\n{schema_desc}\n\n"
+                    f"{truncated_input}"
+                )
+            else:
+                user_prompt = (
+                    f"Create a structured checkpoint summary following this JSON structure:\n{schema_desc}\n\n"
+                    f"TURNS TO SUMMARIZE:\n{truncated_input}"
+                )
+            messages[-1] = ChatMessage(
+                role=MessageRole.USER,
+                content=[{"type": "text", "text": user_prompt}],
+            )
+            try:
+                response = model(messages, stop_sequences=[])
+                raw_output = response.content
+                if isinstance(raw_output, list):
+                    raw_output = " ".join(
+                        block.get("text", "")
+                        for block in raw_output
+                        if isinstance(block, dict) and block.get("type") == "text"
+                    )
+                if not isinstance(raw_output, str):
+                    raw_output = str(raw_output)
+                summary = format_summary_output(raw_output)
+            except Exception as e2:
+                logger.error(f"Offline compression retry still failed: {e2}")
+
+        if summary is None:
+            # L3 fallback: hard truncation
+            is_fallback = True
+            first_task = pairs[0][0][:200] if pairs else ""
+            reduced_chars = int(config.max_summary_reduce_tokens * config.chars_per_token)
+            reduced_text = pairs_text[-reduced_chars:] if len(pairs_text) > reduced_chars else pairs_text
+            summary = (
+                "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier steps were removed to free context space. "
+                "The removed content cannot be summarized. Continue based on the steps below.\n\n"
+                f"Original task: {first_task}\n\n"
+                f"Steps removed: {len(pairs)} of {len(pairs)}\n\n"
+                "Remaining compressed history:\n"
+                + reduced_text
+            )
+
+    return {
+        "summary": summary,
+        "is_incremental": is_incremental,
+        "is_fallback": is_fallback,
+        "input_text": input_text,
+        "input_chars": len(input_text),
+    }
 
 
 class ContextManager:
@@ -58,11 +286,18 @@ class ContextManager:
         self.compression_calls_log: List[CompressionCallRecord] = []
         self._step_local_log: List[CompressionCallRecord] = []
         self._lock = threading.Lock()
+        self._offload_store = OffloadStore(max_entries=self.config.max_offload_entries)
+        self._last_uncompressed_token_count: Optional[int] = None
+        self._last_compressed_token_count: Optional[int] = None
 
         if self.config.max_summary_input_tokens <= 0:
             self.config.max_summary_input_tokens = int(self.config.token_threshold * 1.2)
         if self.config.max_summary_reduce_tokens <= 0:
             self.config.max_summary_reduce_tokens = int(self.config.token_threshold * 0.2)
+
+    @property
+    def offload_store(self) -> OffloadStore:
+        return self._offload_store
 
     # ============================================================
     #  Cache validation
@@ -241,15 +476,18 @@ class ContextManager:
         # G1
         if not self.config.enabled:
             return original_messages
-        
+
         if self._estimate_tokens(memory) <= self.config.token_threshold:
-            return original_messages 
+            self._last_uncompressed_token_count = self._msg_token_count(original_messages)
+            self._last_compressed_token_count = self._last_uncompressed_token_count
+            return original_messages
 
         with self._lock:
             # Run detection
             if (self._last_run_start_idx is not None
                     and current_run_start_idx != self._last_run_start_idx):
                 self._current_summary_cache = None
+                self._offload_store.clear()
             self._last_run_start_idx = current_run_start_idx
 
             # Note: The memory here always consists of the unmodified, summary-task-step-free
@@ -296,11 +534,15 @@ class ContextManager:
                 self.compression_calls_log.append(record)
                 self._step_local_log.append(record)
 
-                return self._build_messages(
+                compressed_msgs = self._build_messages(
                     memory, prev_summary_step, prev_tail_steps, curr_kept_steps
-                ) 
+                )
+                self._last_compressed_token_count = self._msg_token_count(compressed_msgs)
+                return compressed_msgs 
 
             self._step_local_log.clear()
+
+            self._last_uncompressed_token_count = self._msg_token_count(original_messages)
 
             prev_steps = memory.steps[:current_run_start_idx]
             curr_steps = memory.steps[current_run_start_idx:]
@@ -334,10 +576,12 @@ class ContextManager:
                         pairs_to_compress, model
                     )
                     if summary_text:
-                        if "Truncated" in summary_text:
-                            prev_summary_step = SummaryTaskStep(task=summary_text, prefix="Context fallback, Truncated raw history:")
-                        else:
-                            prev_summary_step = SummaryTaskStep(task=summary_text)
+                        is_fallback = "[CONTEXT COMPACTION" in summary_text
+                        prev_summary_step = SummaryTaskStep(
+                            task=summary_text,
+                            is_fallback=is_fallback,
+                            prefix="Context fallback \u2014 some history was lost:" if is_fallback else "Summary of earlier steps in this task:"
+                        )
                         prev_tail_steps = self._pairs_to_steps(pairs_to_keep)
             elif prev_pairs:
                 # if cache is valid, use cache + uncovered display
@@ -376,10 +620,12 @@ class ContextManager:
                             curr_task, actions_to_compress, model
                         )
                         if curr_summary_text:
-                            if "Truncated" in curr_summary_text:
-                                curr_summary_step = SummaryTaskStep(task=curr_summary_text, prefix="Truncated recent action steps:")
-                            else:
-                                curr_summary_step = SummaryTaskStep(task=curr_summary_text)
+                            is_fallback = "[CONTEXT COMPACTION" in curr_summary_text
+                            curr_summary_step = SummaryTaskStep(
+                                task=curr_summary_text,
+                                is_fallback=is_fallback,
+                                prefix="Context fallback \u2014 some recent steps were lost:" if is_fallback else "Summary of earlier steps in this task:"
+                            )
                             curr_kept_steps = (
                                 ([curr_task] if curr_task else [])
                                 + [curr_summary_step]
@@ -399,6 +645,7 @@ class ContextManager:
                 memory, prev_summary_step, prev_tail_steps, curr_kept_steps
             )
             final_tokens = self._msg_token_count(final_messages)
+            self._last_compressed_token_count = final_tokens
             # This situation is unlikely to occur unless the threshold itself is set unreasonably small
             if final_tokens > int(self.config.token_threshold * 1.1):
                 logger.warning(
@@ -457,13 +704,13 @@ class ContextManager:
                 new_pairs = pairs_to_compress[cache.covered_pairs:]
                 incremental_input = (
                     f"## Previous Summary\n{old_summary}\n\n"
-                    f"## New Conversations\n{self._pairs_to_text(new_pairs)}"
+                    f"## New Conversations\n{self._pairs_to_text(new_pairs, offload_store=self._offload_store)}"
                 )
                 input_tokens = self._estimate_text_tokens(incremental_input)
                 if input_tokens <= self.config.max_summary_input_tokens:
                     summary_text = self._generate_summary(
                         incremental_input, model,
-                        call_type="previous_incremental"
+                        call_type="previous_incremental", prompt_type="incremental"
                     )
                     if summary_text:
                         last_t, last_a = pairs_to_compress[-1]
@@ -515,29 +762,40 @@ class ContextManager:
         if not pairs:
             return None, False
 
-        full_text = self._pairs_to_text(pairs)
+        full_text = self._pairs_to_text(pairs, offload_store=self._offload_store)
         if self._estimate_text_tokens(full_text) <= self.config.max_summary_input_tokens:
-            target_text = full_text 
+            target_text = full_text
         else:
             trimmed_pairs = self._trim_pairs_to_budget(
                 pairs, self.config.max_summary_input_tokens, keep_first=False
             )
             target_text = self._render_steps_with_truncation(
-                trimmed_pairs, fmt="pair", 
+                trimmed_pairs, fmt="pair",
                 max_tokens=self.config.max_summary_input_tokens,
-                task_budget_chars=800, action_budget_chars=1500
+                task_budget_chars=800, action_budget_chars=1500,
+                offload_store=self._offload_store
             )
         
-        summary_text = self._generate_summary(target_text, model, call_type="previous_summary")
+        summary_text = self._generate_summary(target_text, model, call_type="previous_summary", prompt_type="initial")
         if summary_text:
             return summary_text, True 
         logger.warning("previous full/truncated history summary generation failed, triggering L3 fallback truncation")
-        
+
         reduced_pairs = self._trim_pairs_to_budget(pairs, self.config.max_summary_reduce_tokens, False)
-        reduced_text = "Truncated: " + self._render_steps_with_truncation(
-            reduced_pairs, fmt="pair", max_tokens=self.config.max_summary_reduce_tokens
+        reduced_text = self._render_steps_with_truncation(
+            reduced_pairs, fmt="pair", max_tokens=self.config.max_summary_reduce_tokens,
+            offload_store=self._offload_store
         )
-        return reduced_text, False
+        first_task = pairs[0][0].task[:200] if pairs and pairs[0][0].task else ""
+        fallback_text = (
+            "[CONTEXT COMPACTION \u2014 REFERENCE ONLY] Earlier steps were removed to free context space. "
+            "The removed content cannot be summarized. Continue based on the steps below.\n\n"
+            f"Original task: {first_task}\n\n"
+            f"Steps removed: {len(pairs) - len(reduced_pairs)} of {len(pairs)}\n\n"
+            "Remaining compressed history:\n"
+            + reduced_text
+        )
+        return fallback_text, False
 
 
     # ============================================================
@@ -572,12 +830,12 @@ class ContextManager:
                 new_actions = actions_to_compress[cache.end_steps:]
                 incremental_input = (
                     f"## Previous Summary\n{old_summary}\n\n"
-                    f"## New Steps\n{task_text}{self._actions_to_text(new_actions)}"
+                    f"## New Steps\n{task_text}{self._actions_to_text(new_actions, offload_store=self._offload_store)}"
                 )
                 input_tokens = self._estimate_text_tokens(incremental_input)
                 if input_tokens <= self.config.max_summary_input_tokens:
                     summary_text = self._generate_summary(
-                        incremental_input, model, call_type="current_incremental"
+                        incremental_input, model, call_type="current_incremental", prompt_type="incremental"
                     )
                     if summary_text:
                         self._current_summary_cache = CurrentSummaryCache(
@@ -605,9 +863,10 @@ class ContextManager:
 
         actions_budget = max(0, self.config.max_summary_input_tokens - self._estimate_text_tokens(task_text))
         full_text = task_text + self._render_steps_with_truncation(
-            safe_actions, fmt="action", max_tokens=actions_budget
+            safe_actions, fmt="action", max_tokens=actions_budget,
+            offload_store=self._offload_store
         )
-        summary_text = self._generate_summary(full_text, model, call_type="current_summary")
+        summary_text = self._generate_summary(full_text, model, call_type="current_summary", prompt_type="initial")
         if summary_text:
             self._current_summary_cache = CurrentSummaryCache(
                 summary_text=summary_text,
@@ -620,15 +879,22 @@ class ContextManager:
                 actions_to_compress, task_text, self.config.max_summary_reduce_tokens
             )
             actions_text = self._render_steps_with_truncation(
-                reduced_actions, fmt="action", max_tokens=self.config.max_summary_reduce_tokens
+                reduced_actions, fmt="action", max_tokens=self.config.max_summary_reduce_tokens,
+                offload_store=self._offload_store
             )
-            reduced_text = "Truncated action steps: " + actions_text
-            return reduced_text
+            fallback_text = (
+                "[CONTEXT COMPACTION \u2014 REFERENCE ONLY] Some recent action steps were removed to free context space. "
+                "Continue based on the remaining steps below.\n\n"
+                f"Steps removed: {len(actions_to_compress) - len(reduced_actions)} of {len(actions_to_compress)}\n\n"
+                "Remaining steps:\n"
+                + actions_text
+            )
+            return fallback_text
 
-    def _actions_to_text(self, actions: List[ActionStep]) -> str:
+    def _actions_to_text(self, actions: List[ActionStep], offload_store: Optional[OffloadStore] = None) -> str:
         parts = []
         for i, step in enumerate(actions):
-            text = self._render_action_step(step)
+            text = self._render_action_step(step, offload_store=offload_store)
             parts.append(f"[Step {step.step_number or i+1}]\n{text}")
         return "\n\n".join(parts)
 
@@ -640,29 +906,30 @@ class ContextManager:
         min_budget_chars: int = 80,
         task_budget_chars: int = 800,
         action_budget_chars: int = None,
+        offload_store: Optional[OffloadStore] = None,
     ) -> str:
         if max_tokens is None:
             max_tokens = self.config.max_summary_input_tokens
         if action_budget_chars is None:
             action_budget_chars = self.config.max_memory_step_length
 
-        entries = self._build_step_entries(steps, fmt)
+        entries = self._build_step_entries(steps, fmt, offload_store=offload_store)
         raw_text = "\n\n".join(task + action for task, action in entries)
         if self._estimate_text_tokens(raw_text) <= max_tokens:
             return raw_text
 
         return self._truncate_entries_to_budget(entries, max_tokens, min_budget_chars, task_budget_chars, action_budget_chars)
 
-    def _build_step_entries(self, steps: List, fmt: str) -> List[Tuple[str, str]]:
+    def _build_step_entries(self, steps: List, fmt: str, offload_store: Optional[OffloadStore] = None) -> List[Tuple[str, str]]:
         entries = []
         for step in steps:
             if fmt == "action":
-                text = f"[Step {step.step_number or '?'}]\n{self._render_action_step(step)}"
+                text = f"[Step {step.step_number or '?'}]\n{self._render_action_step(step, offload_store=offload_store)}"
                 entries.append(("", text))
             else:
                 task_step, action_step = step
                 task_str = f"user: {task_step.task or ''}\nassistant: "
-                action_str = self._render_action_step(action_step)
+                action_str = self._render_action_step(action_step, offload_store=offload_store)
                 entries.append((task_str, action_str))
         return entries
 
@@ -705,39 +972,6 @@ class ContextManager:
             return max(min_budget, int(t_budget * 0.8)), a_budget
         return t_budget, a_budget
 
-    def _actions_to_text_with_limit(self, actions: List[ActionStep], prefill_tokens: int = 0) -> str:
-        rendered_steps = []
-        for i, step in enumerate(actions):
-            prefix = f"[Step {step.step_number or i+1}]\n"
-            content = self._render_action_step(step)
-            rendered_steps.append((prefix, content))
-        budget_per_action = self.config.max_memory_step_length
-
-        while True:
-            parts = [] 
-            
-            for prefix, content in rendered_steps:
-                if len(content) > budget_per_action:
-                    text = f"{prefix}{content[:budget_per_action]}\n\n[System Note: Step content too long, partially truncated]"
-                else:
-                    text = f"{prefix}{content}"
-                parts.append(text)
-                
-            all_text = "\n\n".join(parts)
-
-            if self._estimate_text_tokens(all_text) + prefill_tokens <= self.config.max_summary_input_tokens:
-                break 
-            budget_per_action = int(budget_per_action * 0.9)
-            
-            if budget_per_action < 50:
-                logger.warning(
-                    f"Per-step compression budget has reached minimum threshold "
-                    f"(budget={budget_per_action}), possibly due to excessively long preset prompts. "
-                    f"Forcing return of truncated result."
-                )
-                break
-        return all_text
-
     @staticmethod
     def _action_fingerprint(action: ActionStep) -> str:
         raw = (
@@ -755,42 +989,64 @@ class ContextManager:
     # ============================================================
 
     def _is_context_length_error(self, err: Exception) -> bool:
-        msg = str(err).lower()
-        return any(k in msg for k in (
-            "context_length", "context length", "maximum context", "maximum context length",
-            "prompt is too long", "reduce the length", "too many tokens",
-            "token limit", "exceeds the maximum", "input is too long",
-            "input length", "exceeds context", "context window",
-        ))
+        return _is_context_length_error(err)
 
-    def _generate_summary(self, text: str, model, call_type: str = "summary") -> Optional[str]:
+    def _generate_summary(self, text: str, model, call_type: str = "summary", prompt_type: str = "initial") -> Optional[str]:
         try:
-            return self._do_generate_summary(text, model, call_type)
+            return self._do_generate_summary(text, model, call_type, prompt_type)
         except Exception as e:
-            if self._is_context_length_error(e):
+            if _is_context_length_error(e):
                 logger.warning(f"{call_type} exceeds context limit; retrying with 2/3 budget truncation")
                 shrunk = self._truncate_text_to_tokens(
                     text, int(self.config.max_summary_input_tokens * 0.66)
                 )
                 try:
-                    return self._do_generate_summary(shrunk, model, call_type + "_retry")
+                    return self._do_generate_summary(shrunk, model, call_type + "_retry", prompt_type)
                 except Exception as e2:
                     logger.error(f"Retry still failed: {e2}")
+                    self._record_failed_compression(call_type + "_retry_failed", str(e2))
                     return None
             logger.error(f"Summary generation exception: {e}")
+            self._record_failed_compression(call_type + "_failed", str(e))
             return None
 
-    def _do_generate_summary(self, text: str, model, call_type: str = "summary") -> Optional[str]:
+    def _record_failed_compression(self, call_type: str, error_msg: str):
+        """Record a failed compression attempt so stats reflect actual compression triggers."""
+        record = CompressionCallRecord(
+            call_type=call_type,
+            input_tokens=0,
+            output_tokens=0,
+            input_chars=0,
+            output_chars=0,
+            cache_hit=False,
+            details={"error": error_msg},
+        )
+        self.compression_calls_log.append(record)
+        self._step_local_log.append(record)
+
+    def _do_generate_summary(self, text: str, model, call_type: str = "summary", prompt_type: str = "initial") -> Optional[str]:
+        if prompt_type == "incremental":
+            system_prompt = self.config.incremental_summary_system_prompt
+        else:
+            system_prompt = self.config.summary_system_prompt
+
         schema_desc = json.dumps(
             self.config.summary_json_schema, ensure_ascii=False, indent=2
         )
-        user_prompt = (
-            f"Output a summary following this JSON structure:\n{schema_desc}\n\n"
-            f"Conversation content to summarize:\n{text}"
-        )
+        if prompt_type == "incremental":
+            # text already contains "## Previous Summary" and "## New Conversations/Steps"
+            user_prompt = (
+                f"Update the summary following this JSON structure:\n{schema_desc}\n\n"
+                f"{text}"
+            )
+        else:
+            user_prompt = (
+                f"Create a structured checkpoint summary following this JSON structure:\n{schema_desc}\n\n"
+                f"TURNS TO SUMMARIZE:\n{text}"
+            )
         messages = [
             ChatMessage(role=MessageRole.SYSTEM,
-                        content=[{"type": "text", "text": self.config.summary_system_prompt}]),
+                        content=[{"type": "text", "text": system_prompt}]),
             ChatMessage(role=MessageRole.USER,
                         content=[{"type": "text", "text": user_prompt}]),
         ]
@@ -826,22 +1082,16 @@ class ContextManager:
         self._step_local_log.append(record)
 
     def _format_summary(self, raw_output: str) -> Optional[str]:
-        cleaned = raw_output.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?\s*\n?", "", cleaned)
-            cleaned = re.sub(r"\n?```\s*$", "", cleaned)
-        if not cleaned:
-            return None
-        try:
-            parsed = json.loads(cleaned)
-            return json.dumps(parsed, ensure_ascii=False, indent=2)
-        except json.JSONDecodeError:
-            logger.warning("Summary output is not valid JSON; using as plain text")
-            return cleaned
+        return format_summary_output(raw_output)
 
-    def _render_action_step(self, action: ActionStep) -> str:
+    def _render_action_step(self, action: ActionStep, offload_store: Optional[OffloadStore] = None) -> str:
         msgs = action.to_messages(summary_mode=False)
-        return _extract_text_from_messages(msgs) or ""
+        full_text = _extract_text_from_messages(msgs) or ""
+        if offload_store is not None and self.config.per_step_render_limit > 0 and len(full_text) > self.config.per_step_render_limit:
+            handle = offload_store.store(full_text)
+            limit = self.config.per_step_render_limit
+            return full_text[:limit] + f"\n...[Content offloaded: [[OFFLOAD:handle={handle}]]]"
+        return full_text
 
     def _truncate_text_to_tokens(self, text: str, max_tokens: int) -> str:
         if max_tokens <= 0:
@@ -862,11 +1112,11 @@ class ContextManager:
             result = "...[Earlier content truncated]...\n" + result[:approx_chars]
         return result
 
-    def _pairs_to_text(self, pairs: List[tuple]) -> str:
+    def _pairs_to_text(self, pairs: List[tuple], offload_store: Optional[OffloadStore] = None) -> str:
         parts = []
         for i, (task_step, action_step) in enumerate(pairs):
             task_text = task_step.task or ""
-            action_text = self._render_action_step(action_step)
+            action_text = self._render_action_step(action_step, offload_store=offload_store)
             parts.append(f"user: {task_text}\nassistant: {action_text}")
         return "\n\n".join(parts)
 
@@ -930,7 +1180,107 @@ class ContextManager:
             real_calls = [r for r in self.compression_calls_log if not r.cache_hit]
             return {
                 "total_calls": len(real_calls),
+                "total_attempts": len(self.compression_calls_log),
                 "total_input_tokens": sum(r.input_tokens for r in real_calls),
                 "total_output_tokens": sum(r.output_tokens for r in real_calls),
                 "total_cache_hits": sum(1 for r in self.compression_calls_log if r.cache_hit),
+            }
+
+    # ============================================================
+    #  Benchmark export APIs
+    # ============================================================
+
+    def export_summary(self) -> dict:
+        """Export current compression summary state for benchmark inspection.
+
+        Returns a dict with the compressed summary texts, cache metadata,
+        and compression boundary information. The boundary info tells the
+        benchmark author which pairs/steps were compressed into the summary
+        vs. which were retained verbatim — this is critical for validating
+        probe design (probes should only target compressed content).
+        """
+        with self._lock:
+            prev_cache = self._previous_summary_cache
+            curr_cache = self._current_summary_cache
+            return {
+                "previous_summary": prev_cache.summary_text if prev_cache else None,
+                "current_summary": curr_cache.summary_text if curr_cache else None,
+                "previous_cache_info": (
+                    {
+                        "covered_pairs": prev_cache.covered_pairs,
+                        "is_fallback": "[CONTEXT COMPACTION" in (prev_cache.summary_text or ""),
+                    }
+                    if prev_cache else None
+                ),
+                "current_cache_info": (
+                    {
+                        "end_steps": curr_cache.end_steps,
+                        "is_fallback": "[CONTEXT COMPACTION" in (curr_cache.summary_text or ""),
+                    }
+                    if curr_cache else None
+                ),
+                "compression_boundary": {
+                    "config_keep_recent_pairs": self.config.keep_recent_pairs,
+                    "config_keep_recent_steps": self.config.keep_recent_steps,
+                    "previous_compressed_pairs": (
+                        prev_cache.covered_pairs if prev_cache else 0
+                    ),
+                    "previous_retained_pairs": self.config.keep_recent_pairs,
+                    "current_compressed_steps": (
+                        curr_cache.end_steps if curr_cache else 0
+                    ),
+                    "current_retained_steps": self.config.keep_recent_steps,
+                },
+            }
+
+    def build_compressed_snapshot(
+        self, model, memory: AgentMemory, current_run_start_idx: int,
+    ) -> Tuple[List[ChatMessage], dict]:
+        """Build a frozen compressed message snapshot for probe evaluation.
+
+        Returns (compressed_messages, metadata) without modifying internal
+        cache state. This enables the Probe Evaluation pattern where each
+        probe runs independently against a frozen compressed snapshot.
+
+        metadata contains: token counts, which caches were used, and summary export.
+        """
+        # Save current state before compression (no lock — compress_if_needed
+        # acquires its own lock, so we must not hold one here)
+        saved_prev_cache = self._previous_summary_cache
+        saved_curr_cache = self._current_summary_cache
+        saved_step_log = list(self._step_local_log)
+        saved_calls_log = list(self.compression_calls_log)
+
+        try:
+            original_messages = memory.system_prompt.to_messages() if memory.system_prompt else []
+            for step in memory.steps:
+                original_messages.extend(step.to_messages())
+
+            compressed_messages = self.compress_if_needed(
+                model, memory, original_messages, current_run_start_idx
+            )
+
+            metadata = {
+                "token_counts": self.get_token_counts(),
+                "summary": self.export_summary(),
+                "compression_stats": self.get_step_compression_stats(),
+            }
+            return compressed_messages, metadata
+        finally:
+            # Restore original state — snapshot must not mutate cache
+            self._previous_summary_cache = saved_prev_cache
+            self._current_summary_cache = saved_curr_cache
+            self._step_local_log = saved_step_log
+            self.compression_calls_log = saved_calls_log
+
+    def get_token_counts(self) -> dict:
+        """Return token counts from the most recent compression pass.
+
+        Returns dict with last_uncompressed and last_compressed token counts,
+        enabling accurate token_reduction measurement in benchmarks.
+        """
+        with self._lock:
+            return {
+                "last_uncompressed": self._last_uncompressed_token_count,
+                "last_compressed": self._last_compressed_token_count,
             }
