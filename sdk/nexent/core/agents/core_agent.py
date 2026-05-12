@@ -294,7 +294,7 @@ Additional Args:
         )
 
         input_messages = memory_messages.copy()
-        # import pdb; pdb.set_trace()
+        import pdb; pdb.set_trace()
         # Trigger context compression if needed before building messages
         if self.context_manager and self.context_manager.config.enabled:
             input_messages = self.context_manager.compress_if_needed(
@@ -392,6 +392,18 @@ Additional Args:
             truncated_output = truncate_content(str(code_output.output))
             observation += "Last output from code snippet:\n" + truncated_output
         memory_step.observations = observation
+
+        # Pre-truncate observations if context manager is configured
+        if self.context_manager and self.context_manager.config.enabled:
+            max_obs = self.context_manager.config.max_observation_length
+            if max_obs > 0 and memory_step.observations and len(memory_step.observations) > max_obs:
+                obs_text = memory_step.observations
+                half = max_obs // 2
+                truncation_marker = (
+                    f"\n...[Output truncated to {max_obs} characters. "
+                    f"Use search or read tools to find specific results.]\n"
+                )
+                memory_step.observations = obs_text[:half] + truncation_marker + obs_text[-half:]
 
         if not code_output.is_final_answer and truncated_output is not None:
             execution_outputs_console += [
