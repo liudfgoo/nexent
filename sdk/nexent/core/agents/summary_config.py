@@ -55,7 +55,8 @@ class ContextManagerConfig:
         "You are updating an existing context compaction summary. A previous compaction produced "
         "the summary shown as 'Previous Summary'. New conversation turns have occurred since then "
         "and are shown as 'New Content'. Update the summary by following these rules:\n"
-        "1. PRESERVE all existing information that is still relevant — do not remove unless clearly obsolete.\n"
+        "1. PRESERVE all existing information that is still relevant — do not remove unless clearly obsolete. "
+        "Do not replace specific values with vague summaries — preserve exact numbers, names, and status strings.\n"
         "2. ADD new completed actions to the 'completed_work' list (continue numbering).\n"
         "3. Move items from 'in_progress' to 'completed_work' when done.\n"
         "4. Move answered questions to 'resolved_questions' with their answers.\n"
@@ -108,7 +109,9 @@ class ContextManagerConfig:
         "relevant_files": "Files read, modified, or created — with brief note on each (<=100 words)",
         "critical_context": (
             "Specific values, error messages, configuration details, or data that would be lost "
-            "without explicit preservation. NEVER include credentials — write [REDACTED]. (<=150 words)"
+            "without explicit preservation. Do not replace specific values with vague summaries — "
+            "preserve exact numbers, names, and status strings. "
+            "NEVER include credentials — write [REDACTED]. (<=300 words)"
         ),
     })
 
