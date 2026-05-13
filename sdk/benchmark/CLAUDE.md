@@ -1,3 +1,5 @@
+
+****************
 # CLAUDE.md
 
 ## 目标
@@ -35,19 +37,23 @@ Agent 历史消息结构：
 
 ```
 benchmark/
-├── cases/
-│   ├── example_infra/
-│   │   ├── case.json        # queries, probes, checks, config
-│   │   └── history.json     # conversation history
-│   └── <new_case_id>/
-│       ├── case.json
-│       └── history.json
-├── reports/                  # output (generated at runtime)
-│   ├── <case_id>.json       # per-case detailed report
-│   └── summary.json         # cross-case aggregated metrics
-├── agent_runner.py
-├── eval_utils.py
-└── test_benchmark.py
+├── cases/                      # test_benchmark.py input
+│   └── <case_id>/
+│       ├── case.json           # queries, probes, checks, config
+│       └── history.json        # conversation history
+├── inspections/                # summary_inspector.py input (independent)
+│   └── <name>/
+│       ├── history.json        # conversation history
+│       ├── checks.json         # [{"description": "...", "must_contain": [...]}]
+│       ├── _result.json        # output: inspection result (auto-generated)
+│       └── _summary.txt        # output: raw summary text (with --save-summary)
+├── reports/                    # test_benchmark.py output
+│   ├── <case_id>.json         # full benchmark per-case report
+│   └── summary.json           # full benchmark cross-case metrics
+├── agent_runner.py             # agent run + tracking utilities
+├── eval_utils.py               # keyword-based evaluation
+├── summary_inspector.py        # standalone summary inspection (low cost, no agent)
+└── test_benchmark.py           # full benchmark runner
 ```
 
 `case.json` 格式：

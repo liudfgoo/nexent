@@ -1,5 +1,5 @@
 # Benchmark 测试机制分析
-
+> LongBench、LooGLE、Needle等Benchmark评估的是基础LLM的长上下文理解能力（一次性输入长文本，测试理解/推理/检索），而非Agent的上下文压缩能力（多轮交互后历史被压缩，测试压缩后能否继续工作）。
 ## 1. 核心目标
 
 评估 **Agent Context Compression** 的实用效果，回答：
