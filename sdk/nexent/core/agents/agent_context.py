@@ -138,7 +138,10 @@ def compress_history_offline(
           - "input_chars": character count of the input text
     """
     config = config or ContextManagerConfig()
-
+    # Same compensation as ContextManager.__init__: when max_summary_input_tokens                                                                                                                143 +    # is left at the default 0, derive it from token_threshold so that truncation                                                                                                          
+    # logic doesn't accidentally chop all input.                                                                                                                                           
+    if config.max_summary_input_tokens <= 0:                                                                                                                                             
+        config.max_summary_input_tokens = int(config.token_threshold * 1.2)        
     if not pairs and not previous_summary:
         return {
             "summary": None,
