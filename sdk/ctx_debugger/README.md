@@ -43,11 +43,15 @@ ctx_debugger/
 
 ## 3. 运行前提
 
+> 下文命令默认你站在本目录（README 所在的 `ctx_debugger/`）。相对路径约定：
+> `.` = `ctx_debugger/`，`..` = `sdk/`，`../..` = nexent 仓库根目录
+> （`sdk/`、`backend/`、`.env` 所在的那一层）。
+
 - 用 backend 的 venv Python（已装好 nexent SDK 与依赖）：
   ```
-  /home/feiran/nexent/backend/.venv/bin/python
+  ../../backend/.venv/bin/python
   ```
-- LLM 凭据在 `/home/feiran/nexent/.env`（`agent_runner` 会 `load_dotenv`）：
+- LLM 凭据在仓库根的 `.env`，即 `../../.env`（`agent_runner` 会 `load_dotenv`）：
   ```
   LLM_API_KEY=...
   LLM_MODEL_NAME=...
@@ -66,8 +70,8 @@ ctx_debugger/
 `ContextManager` 跨轮共享，压缩到阈值自然触发。
 
 ```bash
-cd /home/feiran/nexent/sdk/ctx_debugger
-/home/feiran/nexent/backend/.venv/bin/python interactive.py
+# 在 ctx_debugger/ 目录下
+../../backend/.venv/bin/python interactive.py
 ```
 
 每轮自动显示 agent 回答 + context construction 面板（agent steps、main/压缩
@@ -95,15 +99,16 @@ Slash 命令：
 debugger，整轮 benchmark 跑完得到一份 trace。
 
 ```bash
-cd /home/feiran/nexent/sdk/ctx_debugger
+# 在 ctx_debugger/ 目录下
 NEXENT_CONTEXT_DEBUG=/tmp/trace.jsonl \
-  /home/feiran/nexent/backend/.venv/bin/python example_with_benchmark.py
+  ../../backend/.venv/bin/python example_with_benchmark.py
 ```
 
 ### 4.3 事后分析 trace 文件
 
 ```bash
-cd /home/feiran/nexent/sdk
+# 在上一级 sdk/ 目录下
+cd ..
 python -m ctx_debugger.inspector <子命令> <trace.jsonl> [选项]
 ```
 

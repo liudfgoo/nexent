@@ -5,9 +5,8 @@ accumulating conversation history with a shared ContextManager, so compression
 triggers naturally as the history grows. After every turn a debug panel shows
 how the context was built and compressed.
 
-Run:
-    cd /home/feiran/nexent/sdk/ctx_debugger
-    /home/feiran/nexent/backend/.venv/bin/python interactive.py
+Run from this directory (sdk/ctx_debugger); ../../ is the nexent repo root:
+    ../../backend/.venv/bin/python interactive.py
 
 Slash commands:
     /help              list commands

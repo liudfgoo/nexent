@@ -6,9 +6,8 @@ agent auto-attaches a debugger after __init__. The compression-only entry
 point (attaching to ContextManager directly) is no longer needed in this
 example because attaching to the agent picks up the cm anyway.
 
-Run:
-    cd /home/feiran/nexent/sdk/ctx_debugger
-    /home/feiran/nexent/backend/.venv/bin/python example_with_benchmark.py
+Run from this directory (sdk/ctx_debugger); ../../ is the nexent repo root:
+    ../../backend/.venv/bin/python example_with_benchmark.py
 
 Trace lands at $NEXENT_CONTEXT_DEBUG or /tmp/nexent_ctx_trace.jsonl by default.
 """
