@@ -47,7 +47,7 @@ def _truncate_text(s: Optional[str], head: int = 500, tail: int = 500) -> Option
     return s[:head] + f"\n...[{len(s) - head - tail} chars elided]...\n" + s[-tail:]
 
 
-def _messages_digest(messages: Any) -> List[dict]:
+def _messages_digest(messages: Any, full: bool = False) -> List[dict]:
     out = []
     for m in messages or []:
         role = getattr(m, "role", None)
@@ -61,13 +61,16 @@ def _messages_digest(messages: Any) -> List[dict]:
             )
         else:
             text = str(content) if content is not None else ""
-        out.append(
-            {
-                "role": str(role),
-                "chars": len(text),
-                "preview": _truncate_text(text, head=200, tail=200),
-            }
-        )
+        entry = {
+            "role": str(role),
+            "chars": len(text),
+            "preview": _truncate_text(text, head=200, tail=200),
+        }
+        # full=True keeps the verbatim message text (no truncation), so the
+        # exact prompt is recoverable. Used for compression LLM calls.
+        if full:
+            entry["text"] = text
+        out.append(entry)
     return out
 
 
@@ -128,19 +131,28 @@ class ContextDebugger:
         )
 
     def _emit(self, event: str, data: dict) -> None:
-        with self._lock:
-            self._seq += 1
-            record = {
-                "seq": self._seq,
-                "ts": time.time(),
-                "run_id": self.run_id,
-                "agent_step": self._current_step,
-                "event": event,
-                "data": data,
-            }
-            line = json.dumps(record, ensure_ascii=False, default=str)
-            with open(self.trace_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+        # The debugger must never crash the agent it observes: a failed trace
+        # write is swallowed rather than propagated.
+        try:
+            with self._lock:
+                self._seq += 1
+                record = {
+                    "seq": self._seq,
+                    "ts": time.time(),
+                    "run_id": self.run_id,
+                    "agent_step": self._current_step,
+                    "event": event,
+                    "data": data,
+                }
+                line = json.dumps(record, ensure_ascii=False, default=str)
+                # errors="replace": lone surrogates (e.g. from text decoded
+                # with surrogateescape, such as some terminal stdin) cannot be
+                # UTF-8 encoded; replacing them keeps the write from raising.
+                with open(self.trace_path, "a", encoding="utf-8",
+                          errors="replace") as f:
+                    f.write(line + "\n")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------
     #  Compression-layer hooks (Phase 1)
@@ -309,6 +321,10 @@ class _ModelProxy:
         debugger: ContextDebugger = object.__getattribute__(self, "_debugger")
         real = object.__getattribute__(self, "_real")
         tag = "compression" if _compression_active.get() else "main"
+        # Compression calls are this tool's primary subject: always capture
+        # the verbatim prompt and output. Main calls follow
+        # capture_full_messages so the trace stays lean by default.
+        full = tag == "compression" or debugger.capture_full_messages
 
         # Extract messages from first arg (smolagents calling convention)
         input_messages = args[0] if args else kwargs.get("messages")
@@ -316,7 +332,7 @@ class _ModelProxy:
             "llm_call_begin",
             {
                 "tag": tag,
-                "input_messages": _messages_digest(input_messages),
+                "input_messages": _messages_digest(input_messages, full=full),
                 "stop_sequences": kwargs.get("stop_sequences"),
             },
         )
@@ -333,17 +349,19 @@ class _ModelProxy:
                 else (str(output_content) if output_content is not None else "")
             )
             token_usage = getattr(result, "token_usage", None)
-            debugger._emit(
-                "llm_call_end",
-                {
-                    "tag": tag,
-                    "duration_ms": elapsed_ms,
-                    "output_preview": _truncate_text(output_text, head=600, tail=400),
-                    "output_chars": len(output_text),
-                    "input_tokens": getattr(token_usage, "input_tokens", None) if token_usage else None,
-                    "output_tokens": getattr(token_usage, "output_tokens", None) if token_usage else None,
-                },
-            )
+            end_data = {
+                "tag": tag,
+                "duration_ms": elapsed_ms,
+                "output_preview": _truncate_text(output_text, head=600, tail=400),
+                "output_chars": len(output_text),
+                "input_tokens": getattr(token_usage, "input_tokens", None) if token_usage else None,
+                "output_tokens": getattr(token_usage, "output_tokens", None) if token_usage else None,
+            }
+            # full=True keeps the verbatim output (no truncation), so the
+            # exact compression summary is recoverable.
+            if full:
+                end_data["output_full"] = output_text
+            debugger._emit("llm_call_end", end_data)
             return result
         except Exception as exc:
             elapsed_ms = int((time.time() - start) * 1000)
@@ -511,24 +529,30 @@ def _tap_observer(observer, debugger: ContextDebugger) -> None:
     original_add_message = observer.add_message
 
     def wrapped_add_message(agent_name, process_type, content, **kwargs):
-        pt_value = (
-            process_type.value if hasattr(process_type, "value") else str(process_type)
-        )
-        debugger.update_step_from_observer(pt_value, content)
-        debugger._emit(
-            "observer_event",
-            {
-                "agent_name": agent_name,
-                "process_type": pt_value,
-                "content_preview": _truncate_text(
-                    str(content) if content is not None else "",
-                    head=600,
-                    tail=300,
-                ),
-                "content_chars": len(str(content)) if content is not None else 0,
-                "extra_kwargs": list(kwargs.keys()) if kwargs else [],
-            },
-        )
+        # All debugger-side work is guarded so the observed agent's
+        # add_message call always runs, even if trace emission fails.
+        try:
+            pt_value = (
+                process_type.value if hasattr(process_type, "value")
+                else str(process_type)
+            )
+            debugger.update_step_from_observer(pt_value, content)
+            debugger._emit(
+                "observer_event",
+                {
+                    "agent_name": agent_name,
+                    "process_type": pt_value,
+                    "content_preview": _truncate_text(
+                        str(content) if content is not None else "",
+                        head=600,
+                        tail=300,
+                    ),
+                    "content_chars": len(str(content)) if content is not None else 0,
+                    "extra_kwargs": list(kwargs.keys()) if kwargs else [],
+                },
+            )
+        except Exception:
+            pass
         return original_add_message(agent_name, process_type, content, **kwargs)
 
     observer.add_message = wrapped_add_message
@@ -609,7 +633,9 @@ def attach_debugger(
         trace_path: Output JSONL path. Falls back to env var NEXENT_CONTEXT_DEBUG.
         run_id: Optional explicit run id (auto-generated otherwise).
         capture_full_summary: Include full summary text in compression events.
-        capture_full_messages: Reserved; bounded digest is currently always used.
+        capture_full_messages: Also store verbatim message text for main LLM
+            calls. Compression LLM calls are always captured verbatim
+            regardless of this flag.
         layers: Subset of {"compression", "model", "observer", "tools", "executor"}.
             Default: all available layers.
         append: Append to an existing trace file instead of truncating.

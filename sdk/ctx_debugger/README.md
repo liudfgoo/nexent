@@ -33,6 +33,7 @@ ctx_debugger/
 ├── debugger.py              # 核心：ContextDebugger、attach_debugger、各层 proxy
 ├── interactive.py           # 交互式 REPL（主力调试模式）
 ├── inspector.py             # trace 文件的事后分析 CLI
+├── langfuse_export.py       # 把 trace 导入 Langfuse 做可视化分析
 ├── example_with_benchmark.py# 把 debugger 挂到 benchmark 上批量跑
 └── README.md
 ```
@@ -77,14 +78,23 @@ ctx_debugger/
 每轮自动显示 agent 回答 + context construction 面板（agent steps、main/压缩
 LLM 调用、压缩是否触发、token 削减、summary 是否更新）。
 
+面板里 token 数分两类，已分别标注：`main LLM` / `compression LLM` 行带
+`(API)`，是 LLM 实报的 `token_usage`；`compression` 行带 `(est.)`，是
+`ContextManager` 的启发式估算（`estimate_tokens_text`，CJK 感知，不走真
+tokenizer）。**压缩阈值判断用的是估算值**，与 API 实测会有差值（中文文本上
+启发式通常偏高估）。
+
 Slash 命令：
 
 | 命令 | 作用 |
 |---|---|
 | `/help` | 命令列表 |
-| `/context` | 累积的对话历史 |
+| `/context [N]` | 上一轮主 LLM 实际收到的 context（压缩后：system + summary + 最近几轮）；`N` 选第 N 次主调用 |
+| `/history` | 累积的 session 原始账本（每轮逐字，压缩前；REPL 自身的记账，不是模型看到的）|
 | `/summary` | 当前压缩 summary 全文 |
+| `/compress` | 上一轮压缩 LLM 的输入 prompt（喂进去的）与输出 summary（吐出来的），与主回答区分开 |
 | `/tokens` | 逐轮 token 时间线 |
+| `/stats` | 整个 session 的压缩统计——重点是「调用 LLM 的语义压缩」累计次数，外加缓存命中、token 开销 |
 | `/trace` | 上一轮原始事件表 |
 | `/step N` | 上一轮第 N 步的全部事件 JSON |
 | `/config` | 当前 `ContextManagerConfig` |
@@ -92,6 +102,9 @@ Slash 命令：
 | `/quit` `/q` | 退出 |
 
 默认 `token_threshold=3000`，几轮对话即可触发压缩。
+
+输入行支持上/下方向键回溯历史（shell 习惯），历史持久化在
+`~/.nexent_ctx_debugger_history`，跨 session 保留。
 
 ### 4.2 批量挂到 benchmark
 
@@ -123,6 +136,36 @@ python -m ctx_debugger.inspector <子命令> <trace.jsonl> [选项]
 
 `--run` 支持用 8 位短后缀匹配。
 
+### 4.4 导入 Langfuse 做可视化分析
+
+把 trace 映射进自托管的 [Langfuse](https://langfuse.com)，得到嵌套 trace、
+逐调用 drill-down、token/耗时视图、session 分组——不必自己写 web 界面。
+
+```bash
+# 在上一级 sdk/ 目录下
+cd ..
+# 先干跑，看映射结构（不联网）
+python -m ctx_debugger.langfuse_export <trace.jsonl> --dry-run
+# 配好凭据后真正导入
+LANGFUSE_HOST=http://localhost:3000 \
+LANGFUSE_PUBLIC_KEY=pk-... LANGFUSE_SECRET_KEY=sk-... \
+  python -m ctx_debugger.langfuse_export <trace.jsonl>
+```
+
+映射规则：
+
+| ctx_debugger | Langfuse |
+|---|---|
+| 每个 agent 回合（`agent_init`） | 一条 trace |
+| `llm_call_*` | generation（input/output、token、耗时） |
+| `compress_*` | span，内部嵌套该周期的压缩 generation |
+| `tool_call_*` / `code_execute_*` | tool / span 观测 |
+| 整个 trace 文件 | 一个 Langfuse session（回合归组） |
+
+依赖 `langfuse` SDK（`uv pip install langfuse`）。自托管 Langfuse 可用官方
+docker compose 一键起。**已知限制**：observation 在导出时刻创建，单条耗时真实，
+但在 Langfuse 时间轴上的绝对位置是导出时间、非原始时间。
+
 ---
 
 ## 5. 核心 API
@@ -150,6 +193,7 @@ attach_debugger(agent, trace_path="/tmp/run.jsonl")
 | `layers` | `{"compression","model","observer","tools","executor"}` 的子集，默认全开 |
 | `run_id` | 显式 run 标识，默认自动生成 |
 | `capture_full_summary` | 压缩事件里是否带 summary 全文，默认 True |
+| `capture_full_messages` | 主 LLM 调用是否也存消息全文，默认 False；压缩 LLM 调用始终存全文 |
 | `append` | 追加到已有 trace 而不是覆盖 |
 | `existing` | 复用一个已有的 `ContextDebugger`（交互式 session 跨多轮共享同一 trace/run_id 用） |
 
@@ -191,7 +235,7 @@ attach_debugger(agent, trace_path="/tmp/run.jsonl")
 | `compress_begin` | `compress_if_needed` 入口 | `predicted_decision`（决策分支 + compress_prev/curr）、`estimated_tokens` |
 | `compression_call` | step 内每次压缩调用 | call_type、cache_hit、in/out tokens |
 | `compress_end` | `compress_if_needed` 出口 | `token_counts`（压缩前后）、`summary_after`、`summary_changed` |
-| `llm_call_begin` / `llm_call_end` | 每次 LLM 调用 | `tag`（main/compression）、input messages digest、output、token、时长 |
+| `llm_call_begin` / `llm_call_end` | 每次 LLM 调用 | `tag`（main/compression）、input messages（压缩调用每条带 `text` 全文）、output（压缩调用带 `output_full` 全文）、token、时长 |
 | `code_execute_begin` / `code_execute_end` | python executor 执行 | 代码全文、输出、logs、时长 |
 | `tool_call_begin` / `tool_call_end` | 每个工具调用 | tool 名、args、return、时长 |
 | `observer_event` | Nexent observer 每条消息 | process_type、content preview |
@@ -228,9 +272,10 @@ debugger 要跟着改（其它改动一律自动适配）：
 
 ## 8. 已知限制
 
-- **压缩 LLM 的原始 prompt 全文未捕获**：`model` 层记录了压缩调用的 input
-  messages digest 和 output，但没有逐字保存喂给压缩器的完整 prompt。需要时可
-  另行扩展。
+- **主 LLM 调用默认只存 digest**：压缩 LLM 调用的 input messages 与 output 已
+  逐字全量保存（每条消息带 `text`，输出带 `output_full`）；主 LLM 调用默认仍是
+  截断 digest，需要全文时给 `attach_debugger` 传 `capture_full_messages=True`。
+  交互式 REPL 已默认开启该选项，所以 `/context` 能看到全文。
 - **trace 文件不限大小**：长 session 可能几十 MB；`inspector` 目前一次性载入内存。
 - **多 agent 嵌套**：每次 attach 一个 run_id；交互式 session 用 `existing=` 复用
   同一 debugger 来统一 run_id。

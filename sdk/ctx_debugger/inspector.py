@@ -259,9 +259,10 @@ def cmd_compress(trace: Trace, args) -> None:
             et = e["data"].get("estimated_tokens") or {}
             tc = (end["data"].get("token_counts") if end else {}) or {}
             unc, comp = tc.get("last_uncompressed"), tc.get("last_compressed")
+            # Signed delta: negative = shrank, positive = grew.
             ratio = ""
             if unc and comp:
-                ratio = f"-{(1 - comp/unc) * 100:.0f}%"
+                ratio = f"{(comp - unc) / unc * 100:+.0f}%"
 
             llm_io = ""
             if calls:

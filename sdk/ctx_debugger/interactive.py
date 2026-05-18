@@ -10,9 +10,12 @@ Run from this directory (sdk/ctx_debugger); ../../ is the nexent repo root:
 
 Slash commands:
     /help              list commands
-    /context           accumulated conversation history (turn by turn)
+    /context [N]       context the main LLM received last turn (post-compression)
+    /history           raw accumulated session ledger (pre-compression)
     /summary           current compression summary (full text)
+    /compress          last turn's compression LLM input prompt + output summary
     /tokens            per-turn token timeline
+    /stats             session-wide compression stats (LLM compression call count)
     /trace [N]         raw trace events from the last N turns (default 1)
     /step N            dump every event of agent step N in the last turn
     /config            show ContextManagerConfig
@@ -26,6 +29,14 @@ import io
 import json
 import os
 import sys
+from collections import Counter
+
+try:
+    # Importing readline transparently gives input() shell-style line editing
+    # and up/down-arrow history recall.
+    import readline
+except ImportError:  # pragma: no cover - readline is stdlib on Linux/macOS
+    readline = None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SDK_DIR = os.path.dirname(HERE)
@@ -49,15 +60,66 @@ _OUT = sys.stdout
 
 from nexent.core.agents.agent_context import ContextManager, ContextManagerConfig
 from nexent.core.agents.agent_model import AgentHistory
+from nexent.core.utils.token_estimation import estimate_tokens_text
 
 from ctx_debugger import ContextDebugger, attach_debugger
 
 TRACE_PATH = os.environ.get("NEXENT_CONTEXT_DEBUG", "/tmp/nexent_ctx_interactive.jsonl")
+# Shell-style persistent command history, kept across sessions like ~/.bash_history.
+HISTORY_FILE = os.path.expanduser("~/.nexent_ctx_debugger_history")
+# readline needs non-printing escape sequences wrapped in \001..\002 so it
+# measures the prompt width correctly when redrawing on history navigation.
+_PROMPT = "\n\001\033[1;36m\002you>\001\033[0m\002 "
 console = Console(file=_OUT)
 
 
 def _sum(events, key):
     return sum((e["data"].get(key) or 0) for e in events)
+
+
+def _strip_surrogates(s):
+    """Drop lone surrogate code points from a string.
+
+    Terminal line-editing of multi-byte characters (e.g. backspacing over
+    CJK input in WSL / some terminals) can leave half a UTF-8 sequence,
+    which stdin decodes via surrogateescape into lone surrogates. Those
+    cannot be UTF-8 encoded and crash both the agent and the trace writer.
+    """
+    if not isinstance(s, str):
+        return s
+    return s.encode("utf-8", errors="ignore").decode("utf-8")
+
+
+def _clean_input(raw):
+    """Sanitize a REPL input line; warn the user if anything was removed."""
+    cleaned = _strip_surrogates(raw)
+    if cleaned != raw:
+        console.print(
+            "[yellow]·[/] [dim]removed invalid characters from your input "
+            "(terminal line-editing artifact — retype if it looks wrong)[/]"
+        )
+    return cleaned
+
+
+def _init_history():
+    """Load shell-style command history (up/down-arrow recall) from disk."""
+    if readline is None:
+        return
+    try:
+        readline.read_history_file(HISTORY_FILE)
+    except (FileNotFoundError, OSError):
+        pass
+    readline.set_history_length(2000)
+
+
+def _save_history():
+    """Persist command history so it survives across sessions, like a shell."""
+    if readline is None:
+        return
+    try:
+        readline.write_history_file(HISTORY_FILE)
+    except OSError:
+        pass
 
 
 class Session:
@@ -79,7 +141,10 @@ class Session:
         self._last_seq = 0
 
         self.shared_cm = ContextManager(config=self.cm_config, max_steps=max_steps)
-        self.debugger = ContextDebugger(trace_path=TRACE_PATH)
+        # capture_full_messages=True so /context can show the verbatim
+        # post-compression context the main LLM received, not just a digest.
+        self.debugger = ContextDebugger(
+            trace_path=TRACE_PATH, capture_full_messages=True)
 
         # Wrap the shared cm's compression layer once, up front.
         attach_debugger(self.shared_cm, existing=self.debugger, layers={"compression"})
@@ -124,7 +189,11 @@ class Session:
 
     def run_turn(self, user_msg):
         self.turn += 1
+        # Defense in depth: keep the conversation history surrogate-free so a
+        # single bad turn cannot poison every later replay.
+        user_msg = _strip_surrogates(user_msg)
         result = asyncio.run(self._run_turn_async(user_msg))
+        result.final_answer = _strip_surrogates(result.final_answer or "")
         self.history.append(AgentHistory(role="user", content=user_msg))
         self.history.append(AgentHistory(role="assistant", content=result.final_answer))
         self.last_turn_events = self._drain_events()
@@ -171,7 +240,7 @@ def render_turn(session, result, events):
     answer = result.final_answer or "(no answer)"
     console.print(Panel(
         answer.strip(),
-        title=f"Turn {session.turn}  ·  assistant",
+        title=f"Turn {session.turn}  ·  agent final answer (main LLM)",
         border_style="green",
         expand=False,
     ))
@@ -196,13 +265,18 @@ def render_turn(session, result, events):
         t.add_row(
             "main LLM",
             f"×{len(main)}   {_sum(main,'input_tokens')}→{_sum(main,'output_tokens')} tok"
-            f"   {_sum(main,'duration_ms')/1000:.1f}s",
+            f"   {_sum(main,'duration_ms')/1000:.1f}s   [dim](API)[/]",
         )
     if comp:
         t.add_row(
             "compression LLM",
             f"×{len(comp)}   {_sum(comp,'input_tokens')}→{_sum(comp,'output_tokens')} tok"
-            f"   {_sum(comp,'duration_ms')/1000:.1f}s",
+            f"   {_sum(comp,'duration_ms')/1000:.1f}s   [dim](API)[/]",
+        )
+        t.add_row(
+            "",
+            "[dim]↳ separate LLM call (not the answer above) — "
+            "/compress shows its prompt + summary[/]",
         )
 
     if cbegins:
@@ -210,7 +284,10 @@ def render_turn(session, result, events):
             pd = cb["data"].get("predicted_decision") or {}
             tc = ce["data"].get("token_counts") or {}
             unc, cmp_ = tc.get("last_uncompressed"), tc.get("last_compressed")
-            ratio = f"  (-{(1 - cmp_/unc)*100:.0f}%)" if unc and cmp_ else ""
+            # Signed delta: negative = shrank, positive = grew. Compression
+            # can grow the count when a regenerated summary plus the retained
+            # recent steps outweigh the original slice.
+            ratio = f"  ({(cmp_-unc)/unc*100:+.0f}%)" if unc and cmp_ else ""
             sc = ce["data"].get("summary_changed") or {}
             changed = []
             if sc.get("previous_changed"):
@@ -220,7 +297,7 @@ def render_turn(session, result, events):
             t.add_row(
                 "compression",
                 f"[bold]TRIGGERED[/]  branch={pd.get('branch')}  "
-                f"{unc}→{cmp_} tok{ratio}",
+                f"{unc}→{cmp_} tok{ratio}  [dim](est.)[/]",
             )
             if changed:
                 t.add_row("", f"summary updated: {', '.join(changed)}")
@@ -259,7 +336,10 @@ def _print_config(session):
                          expand=False))
 
 
-def _cmd_context(session):
+def _cmd_history(session):
+    """Raw accumulated session ledger — every user message and final answer,
+    verbatim, never compressed. This is the REPL's bookkeeping (the input to
+    the next turn), NOT what the model sees. See /context for that."""
     if not session.history:
         console.print("[dim](no history yet)[/]")
         return
@@ -272,8 +352,113 @@ def _cmd_context(session):
         if len(content) > 200:
             content = content[:200] + f" …[+{len(content)-200} chars]"
         t.add_row(str(i), h.role, content.replace("\n", " "))
-    console.print(Panel(t, title=f"Conversation history ({len(session.history)} msgs)",
-                         border_style="blue", expand=False))
+    console.print(Panel(
+        t,
+        title=f"Session ledger — pre-compression ({len(session.history)} msgs)",
+        border_style="blue", expand=False,
+    ))
+
+
+def _is_summary_msg(text):
+    """Nexent injects the compression summary as a user message with this
+    marker prefix. Used to flag the compressed slice in /context."""
+    return isinstance(text, str) and text.startswith("Summary of earlier steps")
+
+
+def _cmd_context(session, arg=None):
+    """Show what the main LLM actually received last turn — the
+    post-compression context (system prompt + summary + recent turns), not
+    the raw session ledger (see /history for that)."""
+    evs = session.last_turn_events
+    if not evs:
+        console.print("[dim](no events from last turn — run a turn first)[/]")
+        return
+    # Pair main-tagged LLM calls (begin -> end) in chronological order.
+    pairs = []
+    pending = None
+    for e in evs:
+        if e["event"] == "llm_call_begin" and e["data"].get("tag") == "main":
+            pending = e
+        elif e["event"] == "llm_call_end" and e["data"].get("tag") == "main":
+            pairs.append((pending, e))
+            pending = None
+    if pending is not None:
+        pairs.append((pending, None))
+    if not pairs:
+        console.print("[dim](no main LLM call in the last turn)[/]")
+        return
+
+    idx = 1
+    if arg:
+        try:
+            idx = int(arg)
+        except ValueError:
+            console.print("[red]usage: /context [N]  (N = which main LLM call)[/]")
+            return
+    if not (1 <= idx <= len(pairs)):
+        console.print(
+            f"[red]turn made {len(pairs)} main LLM call(s); pick 1..{len(pairs)}[/]")
+        return
+
+    begin, end = pairs[idx - 1]
+    msgs = (begin["data"].get("input_messages")) or []
+    has_summary = False
+    est_total = 0
+
+    t = Table(box=box.SIMPLE)
+    t.add_column("#", justify="right")
+    t.add_column("role", style="cyan", no_wrap=True)
+    t.add_column("tokens", justify="right")
+    t.add_column("content")
+    for i, m in enumerate(msgs):
+        body = m.get("text") or m.get("preview") or ""
+        # estimate_tokens_text is Nexent's own estimator — same primitive the
+        # ContextManager uses, so these line up with the threshold logic.
+        toks = estimate_tokens_text(body)
+        est_total += toks
+        role = m.get("role", "?")
+        is_summary = _is_summary_msg(body)
+        if is_summary:
+            has_summary = True
+            role = "user · summary"
+        flat = body.replace("\n", " ")
+        if len(flat) > 280:
+            flat = flat[:280] + f" …[+{len(flat)-280} chars]"
+        t.add_row(
+            str(i), role, str(toks),
+            f"[yellow]{flat}[/]" if is_summary else flat,
+        )
+
+    title = (f"Context fed to main LLM — turn {session.turn}, "
+             f"call {idx}/{len(pairs)}  ({len(msgs)} msgs"
+             f"{', incl. compression summary' if has_summary else ''})")
+    console.print(Panel(t, title=title, border_style="blue", expand=False))
+
+    real_in = end["data"].get("input_tokens") if end else None
+    footer = f"[dim]· ~{est_total} tokens estimated"
+    if real_in:
+        footer += f"  ·  {real_in} reported by the API"
+    console.print(footer + "[/]")
+    if has_summary:
+        console.print(
+            "[dim]· the [yellow]summary[/] row replaced earlier turns — "
+            "/summary for its full text, /history for the raw ledger[/]")
+    else:
+        console.print(
+            "[dim]· no summary yet — model still sees the full history "
+            "verbatim (compression has not collapsed anything)[/]")
+    # These rows are the INPUT to the call. The model's reply is the call's
+    # output (the agent answer panel), not a context message — so the table
+    # ending at the user's question is correct, nothing is missing.
+    out_chars = end["data"].get("output_chars") if end else None
+    reply_note = f" ({out_chars} chars)" if out_chars else ""
+    console.print(
+        f"[dim]· these are the INPUT to the call; the model's reply{reply_note} "
+        f"is its output — see the agent answer panel above[/]")
+    if len(pairs) > 1:
+        console.print(
+            f"[dim]· turn made {len(pairs)} main LLM calls (one per step); "
+            f"/context N for call N[/]")
 
 
 def _cmd_summary(session):
@@ -293,6 +478,74 @@ def _cmd_summary(session):
     console.print(f"[dim]boundary: {boundary}[/]")
 
 
+def _cmd_compress(session):
+    """Show the compression LLM's input prompt and output summary for the
+    last turn.
+
+    Makes the three things in a compression turn distinguishable:
+      - what was fed INTO the compression LLM (cyan panels)
+      - what the compression LLM PRODUCED (yellow panel — the summary)
+      - the main agent answer is the separate green panel from render_turn.
+    """
+    evs = session.last_turn_events
+    if not evs:
+        console.print("[dim](no events from last turn)[/]")
+        return
+
+    # Pair compression-tagged LLM calls in chronological order.
+    pairs = []
+    pending = None
+    for e in evs:
+        if e["event"] == "llm_call_begin" and e["data"].get("tag") == "compression":
+            pending = e
+        elif e["event"] == "llm_call_end" and e["data"].get("tag") == "compression":
+            pairs.append((pending, e))
+            pending = None
+
+    if not pairs:
+        console.print(
+            "[dim](no compression LLM call last turn — compression did not "
+            "run, or resolved without invoking the LLM)[/]"
+        )
+        return
+
+    # call_type labels come from compression_call records. Cache hits skip the
+    # LLM, so only non-cache-hit records line up with the LLM calls above.
+    call_types = [
+        e["data"].get("call_type")
+        for e in evs
+        if e["event"] == "compression_call" and not e["data"].get("cache_hit")
+    ]
+
+    for idx, (begin, end) in enumerate(pairs):
+        ctype = call_types[idx] if idx < len(call_types) else None
+        header = f"compression call #{idx + 1}"
+        if ctype:
+            header += f"  ·  {ctype}"
+        console.print(f"\n[bold]{header}[/]")
+
+        in_msgs = (begin["data"].get("input_messages") if begin else None) or []
+        for m in in_msgs:
+            body = m.get("text") or m.get("preview") or "(empty)"
+            console.print(Panel(
+                body,
+                title=(f"→ fed to compression LLM   [{m.get('role')}]   "
+                       f"{m.get('chars')} chars"),
+                border_style="cyan",
+                expand=False,
+            ))
+
+        d = end["data"]
+        out = d.get("output_full") or d.get("output_preview") or "(empty)"
+        console.print(Panel(
+            out,
+            title=(f"← compression LLM produced (summary)   "
+                   f"{d.get('output_chars')} chars   {d.get('duration_ms')}ms"),
+            border_style="yellow",
+            expand=False,
+        ))
+
+
 def _cmd_tokens(session):
     if not session.turn_tokens:
         console.print("[dim](no turns yet)[/]")
@@ -310,6 +563,45 @@ def _cmd_tokens(session):
             str(tk["comp_in"] or "-"), str(tk["comp_out"] or "-"),
         )
     console.print(t)
+
+
+def _cmd_stats(session):
+    """Session-wide compression stats — chiefly how many semantic
+    (LLM-invoking) compressions have run so far, plus cache hits and cost.
+
+    Source is the shared ContextManager's compression_calls_log, which
+    accumulates across every turn of the session (cleared only by /reset)."""
+    cm = session.shared_cm
+    try:
+        stats = cm.get_all_compression_stats()
+    except Exception as exc:
+        console.print(f"[red]could not read compression stats: {exc}[/]")
+        return
+
+    log = list(getattr(cm, "compression_calls_log", []) or [])
+    llm_by_type = Counter(r.call_type for r in log if not r.cache_hit)
+    cache_by_type = Counter(r.call_type for r in log if r.cache_hit)
+
+    t = Table(box=box.SIMPLE, show_header=False)
+    t.add_column("k", style="cyan")
+    t.add_column("v")
+    t.add_row("turns run", str(session.turn))
+    t.add_row("LLM compression calls", f"[bold]{stats.get('total_calls', 0)}[/]")
+    t.add_row("cache hits (no LLM call)", str(stats.get("total_cache_hits", 0)))
+    t.add_row("total compression attempts", str(stats.get("total_attempts", 0)))
+    t.add_row(
+        "compression tokens in→out",
+        f"{stats.get('total_input_tokens', 0)}→"
+        f"{stats.get('total_output_tokens', 0)}  [dim](API)[/]",
+    )
+    console.print(Panel(t, title="Compression stats — session-wide",
+                        border_style="blue", expand=False))
+    if llm_by_type:
+        bd = "  ".join(f"{k}×{n}" for k, n in llm_by_type.items())
+        console.print(f"[dim]· LLM compression calls by type: {bd}[/]")
+    if cache_by_type:
+        bd = "  ".join(f"{k}×{n}" for k, n in cache_by_type.items())
+        console.print(f"[dim]· cache-hit (no-LLM) compressions by type: {bd}[/]")
 
 
 def _cmd_trace(session, arg):
@@ -372,9 +664,12 @@ def _cmd_step(session, arg):
 
 HELP = """[bold]Commands[/]
   /help              this help
-  /context           accumulated conversation history
+  /context [N]       context the main LLM received last turn (post-compression)
+  /history           raw session ledger (every turn verbatim, pre-compression)
   /summary           current compression summary (full text)
+  /compress          last turn's compression LLM input prompt + output summary
   /tokens            per-turn token timeline
+  /stats             session-wide compression stats (LLM compression call count)
   /trace             raw trace events from the last turn
   /step N            dump every event of agent step N (last turn)
   /config            show ContextManagerConfig
@@ -395,11 +690,17 @@ def handle_command(session, line):
     if cmd == "/help":
         console.print(Panel(HELP, border_style="magenta", expand=False))
     elif cmd == "/context":
-        _cmd_context(session)
+        _cmd_context(session, arg)
+    elif cmd == "/history":
+        _cmd_history(session)
     elif cmd == "/summary":
         _cmd_summary(session)
+    elif cmd == "/compress":
+        _cmd_compress(session)
     elif cmd == "/tokens":
         _cmd_tokens(session)
+    elif cmd == "/stats":
+        _cmd_stats(session)
     elif cmd == "/trace":
         _cmd_trace(session, arg)
     elif cmd == "/step":
@@ -425,18 +726,25 @@ def handle_command(session, line):
 def main():
     console.print(Panel(
         "Nexent Context Debugger — interactive REPL\n"
-        "Type a message to run one agent turn. /help for commands.",
+        "Type a message to run one agent turn. /help for commands.\n"
+        "Up/down arrows recall earlier input (history kept across sessions).",
         border_style="magenta", expand=False,
     ))
     session = Session()
     _print_config(session)
+    _init_history()
 
     while True:
         try:
-            line = console.input("\n[bold cyan]you>[/] ").strip()
+            # Builtin input() (not console.input) so readline owns the prompt
+            # and up/down-arrow history recall works cleanly.
+            raw = input(_PROMPT)
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]bye.[/]")
             break
+        _save_history()
+
+        line = _clean_input(raw).strip()
 
         if not line:
             continue
