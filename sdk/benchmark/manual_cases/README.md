@@ -11,8 +11,8 @@
 
 ## 运行前提
 
-- 用 backend 的 venv（已装好 nexent SDK 与依赖）：`../../backend/.venv/bin/python`
-- LLM 凭据在仓库根的 `../../.env`（`agent_runner` 会 `load_dotenv`）：
+- 用 backend 的 venv（已装好 nexent SDK 与依赖）：`nexent/backend/.venv/bin/python`
+- LLM 凭据在仓库根的 `nexent/.env`（`agent_runner` 会 `load_dotenv`）：
   `LLM_API_KEY` / `LLM_MODEL_NAME` / `LLM_API_URL`
 - 下文命令默认你站在本目录（`sdk/benchmark/`），路径用的是相对路径。
 
@@ -23,7 +23,7 @@
 ### 1. `test_benchmark.py` —— 端到端 case 评测（主入口）
 
 ```bash
-../../backend/.venv/bin/python test_benchmark.py
+nexent/backend/.venv/bin/python test_benchmark.py
 ```
 
 自动发现 `cases/*/case.json` 下的所有 case，每个 case 跑两组对比实验：
@@ -44,11 +44,11 @@
 
 ```bash
 # 跑 inspections/ 下全部用例
-../../backend/.venv/bin/python summary_inspector.py
+nexent/backend/.venv/bin/python summary_inspector.py
 # 只跑指定一个
-../../backend/.venv/bin/python summary_inspector.py -n example_infra
+nexent/backend/.venv/bin/python summary_inspector.py -n example_infra
 # 自定义压缩参数 + 顺带保存 summary 原文
-../../backend/.venv/bin/python summary_inspector.py --config cfg.json --save-summary
+nexent/backend/.venv/bin/python summary_inspector.py --config cfg.json --save-summary
 ```
 
 ---
@@ -56,7 +56,7 @@
 ## 目录结构
 
 ```
-benchmark/
+manual_cases/
 ├── test_benchmark.py     # 端到端 case 评测入口
 ├── summary_inspector.py  # 静态 summary 质检入口
 ├── agent_runner.py       # Agent 运行封装（构建 run info、跑带 tracking 的 agent）
@@ -83,5 +83,5 @@ benchmark/
 3. 跑 `test_benchmark.py`，结果出现在 `reports/<id>.json`。
 
 > 想看一次 benchmark 跑动时上下文构建与压缩的全过程 trace，用
-> [`../ctx_debugger/`](../ctx_debugger/)（`example_with_benchmark.py` 把
+> [`../../ctx_debugger/`](../../ctx_debugger/)（`example_with_benchmark.py` 把
 > debugger 挂到 benchmark 上批量跑）。
