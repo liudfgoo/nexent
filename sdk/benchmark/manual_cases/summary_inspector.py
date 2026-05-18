@@ -35,14 +35,8 @@ import sys
 import glob
 
 # ============ Path Setup ============
-SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SDK_DIR = os.path.dirname(SCRIPTS_DIR)
-PROJECT_ROOT = os.path.dirname(SDK_DIR)
-
-if SDK_DIR not in sys.path:
-    sys.path.insert(0, SDK_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import paths  # noqa: F401 — side-effect: adds sdk/, backend/ to sys.path
 
 from dotenv import load_dotenv
 load_dotenv()

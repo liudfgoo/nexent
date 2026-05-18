@@ -3,7 +3,7 @@
   "is_fallback": false,
   "is_incremental": false,
   "input_chars": 21935,
-  "summary_chars": 2572,
+  "summary_chars": 2170,
   "checks": [
     {
       "check": {
@@ -97,13 +97,13 @@
           "unhealthy"
         ]
       },
-      "passed": true,
-      "score": 1.0,
+      "passed": false,
+      "score": 0.0,
       "details": {
         "must_contain": {
-          "matched": 1,
+          "matched": 0,
           "total": 1,
-          "ok": true
+          "ok": false
         }
       }
     },
@@ -178,7 +178,7 @@
       }
     }
   ],
-  "score": 0.85,
-  "passed": 8,
+  "score": 0.75,
+  "passed": 7,
   "total": 10
 }

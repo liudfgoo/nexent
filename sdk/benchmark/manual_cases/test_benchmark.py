@@ -3,6 +3,10 @@ import copy
 import glob
 import json
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import paths  # noqa: F401 — side-effect: adds sdk/, backend/ to sys.path
 
 from agent_runner import (
     build_agent_run_info,
