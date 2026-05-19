@@ -4,6 +4,7 @@ import glob
 import json
 import os
 import sys
+import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import paths  # noqa: F401 — side-effect: adds sdk/, backend/ to sys.path
@@ -431,9 +432,11 @@ async def run_one_case(case_dir: str):
         token_reduction = 1 - (
             compressed["final_tokens"] / max(baseline["final_tokens"], 1)
         )
+    baseline_failed = baseline_task_score == 0 
 
     report = {
         "case_id": case["id"],
+        "baseline_failed": baseline_failed,
         "baseline": {
             "task_score": baseline_task_score,
             "probe_score": baseline_probe_score,
@@ -465,10 +468,13 @@ async def run_one_case(case_dir: str):
     return report
 
 
-async def main():
-    # Discover all cases under cases/*/case.json
-    case_dirs = sorted(glob.glob("./cases/*/case.json"))
-    case_dirs = [os.path.dirname(p) for p in case_dirs]
+async def main(case_names: list[str] = None):
+    # Discover cases: use specified names if provided, otherwise find all cases under ./cases/*/case.json
+    if case_names:
+        case_dirs = [os.path.join("./cases", name) for name in case_names]
+    else:
+        case_dirs = sorted(glob.glob("./cases/*/case.json"))
+        case_dirs = [os.path.dirname(p) for p in case_dirs]
 
     if not case_dirs:
         print("No benchmark cases found under ./cases/*/case.json")
@@ -490,20 +496,26 @@ async def main():
         with open(per_case_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2, default=str)
         print(f"  Report saved to {per_case_path}")
-
+    
+    # Exclude cases where baseline itself failed
+    valid_reports = [r for r in reports if not r.get["baseline_failed"]]
+    excluded_ids = [r["case_id"] for r in reports if r.get("baseline_failed")]
+    if excluded_ids:
+        print(f"\n  Excluded from average (baseline failed): {excluded_ids}")
     # Write summary across all cases
     summary = {
         "total_cases": len(reports),
+        "excluded_cases": len(reports) - len(valid_reports),
         "metrics": {
             "avg_task_success_retention": sum(
-                r["metrics"]["task_success_retention"] for r in reports
-            ) / max(len(reports), 1),
+                r["metrics"]["task_success_retention"] for r in valid_reports
+            ) / max(len(valid_reports), 1),
             "avg_probe_retention": sum(
-                r["metrics"]["probe_retention"] for r in reports
-            ) / max(len(reports), 1),
+                r["metrics"]["probe_retention"] for r in valid_reports
+            ) / max(len(valid_reports), 1),
             "avg_token_reduction": sum(
-                r["metrics"]["token_reduction"] for r in reports
-            ) / max(len(reports), 1),
+                r["metrics"]["token_reduction"] for r in valid_reports
+            ) / max(len(valid_reports), 1),
             "per_case": {
                 r["case_id"]: r["metrics"] for r in reports
             },
