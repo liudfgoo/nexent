@@ -17,6 +17,7 @@
 benchmark/
 ├── manual_cases/          # 手工构造的 case，完整评估流水线
 ├── acon_eval/             # 基于 ACON 数据集的 QA 评估
+├── eventqa_eval/          # 基于 EventQA 数据集的长文记忆评估
 └── paths.py               # 共享路径解析
 ```
 
@@ -183,6 +184,63 @@ python run_acon_qa.py \
 
 **模式**：`baseline`（不压缩）vs `context_manager`（nexent 内置压缩）。
 **说明**：这里的对话历史结构与 manual_cases 不同，该测试场景下不存在previous history，只有 current 场景下的多步。
+
+---
+
+### 3. eventqa_eval — EventQA 长文记忆评估
+
+使用 MemoryAgentBench 的 EventQA 数据集（5 部小说，每部 39 万–53 万 tokens，各 100 道"接下来发生什么"六选一 MCQ），评估压缩对**超长文档记忆**的影响。
+
+与 acon_eval 一样是数据集驱动，但场景不同：整本小说作为待压缩的历史，MCQ 直接作为记忆探针（probe）——题目自带前序事件，天然就是"给你压缩后的摘要，问接下来发生什么"，无需额外构造 probe。
+
+```
+eventqa_eval/
+├── data/                      # download_data.py 下载的小说（.gitignore，不入库）
+│   └── eventqa_full.jsonl
+├── outputs/                   # 各书结果
+│   └── <book_id>/
+│   │   ├── predictions.jsonl  # 逐题 baseline vs compressed 对照
+│   │   └── summary.json       # 单书指标
+│   └── summary.json           # 跨书汇总
+├── download_data.py           # 从 HuggingFace 下载 EventQA 数据
+├── dataset.py                 # EventQA 加载器 + 六选一 MCQ 解析
+├── eval_utils.py              # 六选一准确率评分
+└── run_eventqa.py             # 主入口
+```
+
+**两条评估臂**（同一模型，retention 比值干净）：
+
+| 臂 | 压缩 | 小说上下文 |
+|---|---|---|
+| Baseline | 关闭 | 整本截断到模型窗口后整段喂入（窗口外的题会错） |
+| Compressed | 开启 | 整本切块、多轮喂入，真实 ContextManager 增量压缩；MCQ 作为 probe |
+
+两条臂回答**同一批 100 道题**，因此 retention 比值干净：
+
+```python
+memory_retention = compressed_accuracy / baseline_accuracy
+
+token_reduction  = 1 - last_compressed_tokens / last_uncompressed_tokens
+```
+
+不评 Continuation——EventQA 的 MCQ 彼此独立，无多轮任务延续。
+
+用法：
+
+```bash
+# 一次性：下载 5 部小说（约 13MB，写入 data/）
+python download_data.py
+
+# 冒烟测试：1 本书、1 题、小说截断到 4.8 万字符（触发压缩）
+python run_eventqa.py --book_limit 1 --limit 1 \
+    --max_ingest_chars 48000 --chunk_chars 12000 \
+    --token_threshold 3000 --keep_recent_pairs 1
+
+# 完整运行：5 本书 × 100 题
+python run_eventqa.py
+```
+
+**说明**：`eventqa_full` 小说 170 万–320 万字符，任何模型都无法整本不压缩喂入，所以 baseline 用"截断到窗口"作为不压缩对照（`--baseline_context_chars` 控制截断长度）。数据集另有 `eventqa_65536` / `eventqa_131072` 预截断变体，但其问题与 `eventqa_full` 不同，无法与 full 直接对照。
 
 ---
 
