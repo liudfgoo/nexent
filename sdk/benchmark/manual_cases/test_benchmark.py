@@ -529,4 +529,11 @@ async def main(case_names: list[str] = None):
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Run Agent Context Compression Benchmark")
+    parser.add_argument(
+        "--cases",nargs="+",default=None,
+        help="Specific case names to run (e.g. --cases example_infra algotithm_data)."
+             "if omitted, run all cases under .cases/."
+    )
+    args = parser.parse_args()
+    asyncio.run(main(case_names = args.cases))
