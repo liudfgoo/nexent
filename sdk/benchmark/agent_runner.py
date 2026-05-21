@@ -47,6 +47,34 @@ LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME")
 LLM_API_URL = os.getenv("LLM_API_URL")
 
+# Optional provider-specific knobs forwarded to chat.completions.create as
+# the OpenAI SDK's ``extra_body`` parameter. Two layered sources:
+#   * LLM_EXTRA_BODY — raw JSON, wins when set. Example:
+#       LLM_EXTRA_BODY={"chat_template_kwargs":{"enable_thinking":false}}
+#   * LLM_ENABLE_THINKING — convenience flag. When set to a falsey value
+#       ("false"/"0"/"no"/"off") this produces the Qwen3 thinking-off body.
+# Default behaviour (both unset) leaves extra_body=None — fully backwards
+# compatible.
+_LLM_EXTRA_BODY_RAW = (os.getenv("LLM_EXTRA_BODY") or "").strip()
+_LLM_ENABLE_THINKING_RAW = (os.getenv("LLM_ENABLE_THINKING") or "true").strip().lower()
+
+
+def _resolve_llm_extra_body():
+    if _LLM_EXTRA_BODY_RAW:
+        try:
+            return json.loads(_LLM_EXTRA_BODY_RAW)
+        except json.JSONDecodeError as exc:
+            logging.getLogger(__name__).warning(
+                "Ignoring LLM_EXTRA_BODY (not valid JSON): %s", exc
+            )
+            return None
+    if _LLM_ENABLE_THINKING_RAW in ("false", "0", "no", "off"):
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+    return None
+
+
+LLM_EXTRA_BODY = _resolve_llm_extra_body()
+
 APP_NAME = os.getenv("APP_NAME", "Nexent")
 APP_DESCRIPTION = os.getenv("APP_DESCRIPTION", "Nexent 是一个开源智能体SDK和平台")
 
@@ -217,6 +245,7 @@ def build_agent_run_info(
         url=LLM_API_URL,
         temperature=temperature,
         ssl_verify=False,
+        extra_body=LLM_EXTRA_BODY,
     )
 
     if duty or constraint or few_shots:
@@ -319,6 +348,7 @@ def build_agent_run_info_with_custom_prompt(
         url=LLM_API_URL,
         temperature=temperature,
         ssl_verify=False,
+        extra_body=LLM_EXTRA_BODY,
     )
 
     prompt_templates = build_prompt_templates(

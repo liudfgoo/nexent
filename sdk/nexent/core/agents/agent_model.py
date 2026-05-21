@@ -30,6 +30,14 @@ class ModelConfig(BaseModel):
         description="Model provider identifier (e.g., openai, modelengine)",
         default=None
     )
+    extra_body: Optional[Dict[str, Any]] = Field(
+        description=(
+            "Extra fields merged into every OpenAI-compatible chat completion "
+            "request body. Used for provider-specific knobs such as Qwen3's "
+            'chat_template_kwargs={"enable_thinking": false}.'
+        ),
+        default=None,
+    )
 
 
 class ToolConfig(BaseModel):

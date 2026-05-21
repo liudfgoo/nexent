@@ -71,10 +71,11 @@ services:
     image: docker.io/langfuse/langfuse:3
     restart: always
     depends_on: *langfuse-depends-on
-    # Only this service is reachable from the host. Bound to 127.0.0.1 so it
-    # is not exposed off-machine; 3100 avoids Nexent's web on 3000.
+    # Only this service is published. Bound to all interfaces so a Windows
+    # netsh portproxy (host:3100 -> WSL:3100) can reach it from the LAN.
+    # All other Langfuse components stay internal — no other port is exposed.
     ports:
-      - 127.0.0.1:3100:3000
+      - "3100:3000"
     environment:
       <<: *langfuse-worker-env
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-mysecret}

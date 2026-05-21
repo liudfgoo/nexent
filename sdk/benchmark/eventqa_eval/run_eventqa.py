@@ -338,10 +338,16 @@ async def run_probes(items, history: list[AgentHistory], args) -> list[dict]:
 
 async def run_book(book: EventQABook, args) -> dict:
     """Run the baseline arm plus one compressed arm per summary schema."""
-    items = book.items[:args.limit] if args.limit else book.items
+    # --question_start lets a salvaged / resumed run skip already-done qids.
+    start = max(0, args.question_start)
+    end = start + args.limit if args.limit else None
+    items = book.items[start:end] if end is not None else book.items[start:]
     schemas = resolve_schemas(args.summary_schema)
     print(f"\n===== BOOK: {book.book_title} ({book.book_id}) =====")
-    print(f"  novel chars={len(book.context)}  questions={len(items)}")
+    if start > 0:
+        print(f"  novel chars={len(book.context)}  questions={len(items)} (qids {start}..{start+len(items)-1})")
+    else:
+        print(f"  novel chars={len(book.context)}  questions={len(items)}")
 
     # ---- Compressed arm(s): one ingest + probe pass per summary schema ----
     compressed: dict[str, dict] = {}
@@ -572,6 +578,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         help="Evaluate only the book at this index (0-4); overrides --book_limit")
     parser.add_argument("--limit", type=int, default=None,
                         help="Limit questions per book (default: all 100)")
+    parser.add_argument("--question_start", type=int, default=0,
+                        help="Skip the first N questions (for resuming an interrupted run)")
     parser.add_argument("--token_threshold", type=int, default=12000,
                         help="ContextManager token threshold for the compressed arm")
     parser.add_argument("--keep_recent_pairs", type=int, default=2,
