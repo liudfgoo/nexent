@@ -12,6 +12,9 @@
 - venv：`nexent/backend/.venv/bin/python`
 - 数据：一次性 `python download_data.py`（13MB，写到 `data/eventqa_full.jsonl`，已 .gitignore）
 - LLM 凭据：仓库根 `nexent/.env` 的 `LLM_API_KEY` / `LLM_MODEL_NAME` / `LLM_API_URL`
+- LLM 可选环境变量（仓库根 `nexent/.env`，与上一条 LLM_* 同区）：
+  - `LLM_ENABLE_THINKING` — `false` 时给 Qwen3 类模型关 thinking（见 §8.1）
+  - `LLM_EXTRA_BODY` — 通用版本，直接给一段 JSON 透传到 `chat.completions.create` 的 `extra_body`
 - Langfuse（可选，用于 trace 可视化）：已自托管在 `http://localhost:3100`；凭据见 `sdk/ctx_debugger/langfuse/.env`
 
 ### 新环境从零起步

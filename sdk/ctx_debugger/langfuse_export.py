@@ -33,6 +33,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -76,6 +77,92 @@ def _load(path: str) -> List[dict]:
             if line:
                 events.append(json.loads(line))
     return events
+
+
+# ============================================================
+#  Benchmark probe-score helpers (optional --benchmarkqa-outputs)
+# ============================================================
+# When the caller points us at a benchmark outputs/<book_id>/ directory
+# (currently eventqa_eval; longmemeval & others can plug in later as long as
+# they emit a compatible predictions.jsonl), we read its predictions.jsonl
+# and attach Langfuse Scores to each probe trace:
+#   * name=correctness (NUMERIC 0/1) + name=match_type (CATEGORICAL),
+#     with arm/schema in score metadata
+# AND session-level aggregates (read from summary.json) pushed directly
+# to the session_id:
+#   * baseline_accuracy / compressed_accuracy_<schema> /
+#     memory_retention_<schema> / token_reduction_<schema>
+# These show up in the Langfuse project session list as per-session
+# aggregates — visible alongside session name without drilling into traces.
+
+def _qnum(qid: Optional[str]) -> int:
+    m = re.search(r"no(\d+)$", qid or "")
+    return int(m.group(1)) if m else -1
+
+
+def _load_benchmark_outputs(out_dir: Optional[str]) -> Optional[dict]:
+    if not out_dir:
+        return None
+    pred_p = os.path.join(out_dir, "predictions.jsonl")
+    sum_p = os.path.join(out_dir, "summary.json")
+    if not os.path.exists(pred_p):
+        return None
+    preds = []
+    with open(pred_p, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                preds.append(json.loads(line))
+    preds.sort(key=lambda p: _qnum(p.get("qid")))
+    summary = None
+    if os.path.exists(sum_p):
+        with open(sum_p, encoding="utf-8") as f:
+            summary = json.load(f)
+    return {"predictions": preds, "summary": summary}
+
+
+def _push_session_aggregates(client, session_id: str, summary: dict) -> int:
+    """Push session-level aggregates (baseline_accuracy / compressed_accuracy_<schema>
+    / memory_retention_<schema> / token_reduction_<schema>) directly to the
+    session — no host trace required. Despite my earlier failed API queries,
+    these scores DO persist in Langfuse v4 and show up in the project session
+    list as per-session aggregates (visible in the UI alongside the session
+    name, no need to drill into a trace).
+    """
+    if not summary:
+        return 0
+    pushed = 0
+
+    def _push(name, value):
+        nonlocal pushed
+        if value is None:
+            return
+        try:
+            client.create_score(session_id=session_id, name=name,
+                                value=float(value), data_type="NUMERIC")
+            pushed += 1
+        except Exception as e:
+            print(f"  warn: failed to push {name}={value}: {e}", file=sys.stderr)
+
+    _push("baseline_accuracy", (summary.get("baseline") or {}).get("accuracy"))
+    for schema, c in (summary.get("compressed") or {}).items():
+        _push(f"compressed_accuracy_{schema}", c.get("accuracy"))
+        _push(f"memory_retention_{schema}", c.get("memory_retention"))
+        _push(f"token_reduction_{schema}", c.get("token_reduction"))
+    return pushed
+
+
+def _classify_probe_arm(events: List[dict]) -> str:
+    """compressed vs baseline — detect by the 'Here is the novel' marker."""
+    for ev in events:
+        if ev.get("event") != "llm_call_begin":
+            continue
+        for m in ev.get("data", {}).get("input_messages", []) or []:
+            txt = m.get("text") or m.get("preview") or ""
+            if "Here is the novel" in txt:
+                return "baseline"
+        break
+    return "compressed"
 
 
 def _split_turns(events: List[dict]) -> List[dict]:
@@ -281,7 +368,64 @@ def _emit(parent, o: Obs) -> None:
     child.end(end_time=start_ns + int((o.duration_ms or 0) * 1e6))
 
 
-def _export(turns: List[dict], session_id: str) -> None:
+def _push_probe_score(client, turn: dict, trace_id: str, benchmark_data: dict,
+                      comp_idx: int, base_idx: int) -> tuple:
+    """If this turn is a benchmark probe agent, attach correctness + match_type
+    scores to the just-created trace. Returns updated (comp_idx, base_idx)."""
+    init = turn.get("init") or {}
+    agent_name = (init.get("data") or {}).get("agent_name") or ""
+    # Currently recognises eventqa_answerer; longmemeval / other benchmarks
+    # can plug in here once their probe agent uses an *_answerer name.
+    if "answerer" not in agent_name:
+        return comp_idx, base_idx
+    if not trace_id:
+        return comp_idx, base_idx
+
+    arm = _classify_probe_arm(turn["events"])
+    preds = benchmark_data["predictions"]
+    idx = comp_idx if arm == "compressed" else base_idx
+    if idx >= len(preds):
+        return comp_idx, base_idx  # out of probes — skip silently
+
+    row = preds[idx]
+    if arm == "compressed":
+        compressed_block = row.get("compressed") or {}
+        # First schema present (single-schema case) — for multi-schema use the
+        # session-level score breakdown to disambiguate.
+        if not compressed_block:
+            return comp_idx + 1, base_idx
+        schema = next(iter(compressed_block.keys()))
+        arm_pred = compressed_block[schema]
+        meta = {"arm": "compressed", "schema": schema,
+                "qid": row.get("qid"), "match_type": arm_pred.get("match_type")}
+    else:
+        arm_pred = row.get("baseline") or {}
+        if not arm_pred:
+            return comp_idx, base_idx + 1
+        meta = {"arm": "baseline", "qid": row.get("qid"),
+                "match_type": arm_pred.get("match_type")}
+
+    client.create_score(
+        trace_id=trace_id,
+        name="correctness",
+        value=1.0 if arm_pred.get("correct") else 0.0,
+        data_type="NUMERIC",
+        metadata=meta,
+    )
+    if arm_pred.get("match_type"):
+        client.create_score(
+            trace_id=trace_id,
+            name="match_type",
+            value=arm_pred["match_type"],
+            data_type="CATEGORICAL",
+            metadata={"arm": arm},
+        )
+
+    return (comp_idx + 1, base_idx) if arm == "compressed" else (comp_idx, base_idx + 1)
+
+
+def _export(turns: List[dict], session_id: str,
+            benchmark_data: Optional[dict] = None) -> None:
     from langfuse import Langfuse
     try:
         from langfuse import propagate_attributes
@@ -289,6 +433,9 @@ def _export(turns: List[dict], session_id: str) -> None:
         propagate_attributes = None
 
     client = Langfuse()
+    comp_idx = 0
+    base_idx = 0
+
     for i, turn in enumerate(turns, 1):
         roots = _build_tree(turn["events"])
         init = turn["init"]
@@ -309,7 +456,30 @@ def _export(turns: List[dict], session_id: str) -> None:
             )
             for o in roots:
                 _emit(root, o)
+
+            # Attach per-probe correctness scores using the explicit trace_id
+            # of the just-created root observation. Doesn't depend on
+            # OTEL "current span" context (start_observation does NOT make
+            # the span current — would need start_as_current_observation).
+            if benchmark_data is not None:
+                comp_idx, base_idx = _push_probe_score(
+                    client, turn, getattr(root, "trace_id", None),
+                    benchmark_data, comp_idx, base_idx,
+                )
+
             root.end(end_time=start_ns + int((t1 - t0) * 1e9))
+
+    if benchmark_data is not None:
+        # Per-probe scores attached above. Now push session-level aggregates
+        # (baseline_accuracy / compressed_accuracy_<schema> / memory_retention
+        # / token_reduction) directly to the session_id — these show up in
+        # the Langfuse project session list as per-session aggregates without
+        # needing a phantom 'session-summary' trace.
+        n = _push_session_aggregates(client, session_id,
+                                     benchmark_data.get("summary") or {})
+        print(f"  scores: {comp_idx} compressed + {base_idx} baseline "
+              f"correctness on probe traces + {n} session aggregates")
+
     client.flush()
 
 
@@ -327,6 +497,16 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true",
                     help="Print the mapped trace tree; do not contact Langfuse.")
     ap.add_argument("--host", help="Langfuse host (else $LANGFUSE_HOST).")
+    ap.add_argument(
+        "--benchmarkqa-outputs", default=None,
+        help=("Optional path to a benchmark outputs/<book_id>/ directory "
+              "(e.g. eventqa_eval/outputs/eventqa_full_book0). When set, the "
+              "export attaches per-probe Langfuse Scores: name=correctness "
+              "(NUMERIC 0/1) + name=match_type (CATEGORICAL), with arm/schema "
+              "in score metadata. Langfuse UI rolls these up into per-session "
+              "averages automatically (filter by metadata.arm). When NOT set, "
+              "the export does plain trace upload — identical to before."),
+    )
     args = ap.parse_args()
 
     events = _load(args.trace)
@@ -349,7 +529,13 @@ def main() -> None:
         sys.exit("ERROR: set LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY "
                  "(and LANGFUSE_HOST), or use --dry-run.")
 
-    _export(turns, session_id)
+    benchmark_data = _load_benchmark_outputs(args.benchmarkqa_outputs)
+    if args.benchmarkqa_outputs and not benchmark_data:
+        print(f"  warn: --benchmarkqa-outputs={args.benchmarkqa_outputs} did not "
+              f"yield predictions.jsonl; skipping score upload.",
+              file=sys.stderr)
+
+    _export(turns, session_id, benchmark_data=benchmark_data)
     print(f"Exported {len(turns)} turn(s) to Langfuse — session_id={session_id}")
 
 
