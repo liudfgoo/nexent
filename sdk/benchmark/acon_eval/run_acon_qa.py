@@ -111,7 +111,7 @@ Before moving from one question to the next, output exactly one plain-text marke
 ANSWER_Q<number>: <canonical answer>
 
 
-Examples:
+JUST Examples:
 ANSWER_Q1: Eva Lund
 ANSWER_Q2: September 1980
 
@@ -134,7 +134,7 @@ Use a real code block:
 final_answer(answer="{answer_slots}")
 </code>
 
-Now begin.
+Start answering the real questions, starting with obtaining ANSWER_Q1.
 """
 
 def _sanitize_for_path(name: str) -> str:
@@ -199,7 +199,10 @@ async def run_sample(
         "f1_list": f1_list,
         "step_count": result.step_count,
         "errors": result.errors,
+        "total_input_tokens": result.total_input_tokens,
+        "total_output_tokens": result.total_output_tokens,
         "cm_stats": shared_cm.get_all_compression_stats() if shared_cm else None,
+        "cm_token_counts": shared_cm.get_token_counts() if shared_cm else None,
     }
 
 
@@ -410,7 +413,10 @@ async def main(
                 "f1_list": [],
                 "step_count": 0,
                 "errors": [str(e)],
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
                 "cm_stats": None,
+                "cm_token_counts": None,
             }
 
         em_sum += em_score
@@ -429,7 +435,26 @@ async def main(
             "f1_list": sample_result["f1_list"],
             "step_count": sample_result["step_count"],
             "errors": sample_result["errors"],
+            "total_input_tokens": sample_result["total_input_tokens"],
+            "total_output_tokens": sample_result["total_output_tokens"],
+            "cm_stats": sample_result.get("cm_stats"),
+            "cm_token_counts": sample_result.get("cm_token_counts"),
         })
+
+    # Token aggregates
+    total_input_tokens = sum(row["total_input_tokens"] for row in all_rows)
+    total_output_tokens = sum(row["total_output_tokens"] for row in all_rows)
+    avg_input_tokens = (total_input_tokens / n) if n else 0.0
+    avg_output_tokens = (total_output_tokens / n) if n else 0.0
+
+    # Compression cost aggregate (context_manager mode only)
+    total_compression_cost_tokens = 0
+    for row in all_rows:
+        cm_stats = row.get("cm_stats")
+        if cm_stats:
+            total_compression_cost_tokens += cm_stats.get("total_input_tokens", 0)
+            total_compression_cost_tokens += cm_stats.get("total_output_tokens", 0)
+    avg_compression_cost_tokens = (total_compression_cost_tokens / n) if n else 0.0
 
     # Summary
     summary = {
@@ -443,6 +468,11 @@ async def main(
         "max_steps": max_steps,
         "token_threshold": token_threshold if mode == "context_manager" else None,
         "keep_recent_pairs": keep_recent_pairs if mode == "context_manager" else None,
+        "avg_input_tokens": avg_input_tokens,
+        "avg_output_tokens": avg_output_tokens,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "avg_compression_cost_tokens": avg_compression_cost_tokens if mode == "context_manager" else None,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -461,6 +491,10 @@ async def main(
     print(f"  Total:      {n}")
     print(f"  Avg EM:     {em_sum/n*100:.1f}% ({em_sum:.2f}/{n})" if n else "  Avg EM: N/A")
     print(f"  Avg F1:     {f1_sum/n:.3f}" if n else "  Avg F1: N/A")
+    print(f"  Avg Input Tokens:  {avg_input_tokens:,.0f}")
+    print(f"  Avg Output Tokens: {avg_output_tokens:,.0f}")
+    if mode == "context_manager":
+        print(f"  Avg Compression Cost: {avg_compression_cost_tokens:,.0f} tokens")
     print(f"  Output:     {out_dir}")
     print(f"{'='*60}\n")
 
