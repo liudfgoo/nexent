@@ -17,7 +17,7 @@ Usage:
     #   (or download the corpus and start it per ACON README)
 
     python run_acon_qa.py \
-        --data_folder D:/path/to/acon/experiments/smolagents/data/nq_multi_8 \
+        --data_folder data/nq_multi_8 \
         --split test \
         --mode baseline \
         --num_objectives 4 \
@@ -64,65 +64,78 @@ from nexent.core.agents.agent_context import ContextManager
 # ---- QA-specific system prompt builder ----
 
 def build_qa_system_prompt(num_objectives: int) -> str:
-    """Build a lean, QA-optimized system prompt.
-
-    This bypasses the generic platform template to avoid irrelevant sections
-    (File URL Guide, Reference Marks, Markdown formatting, safety principles)
-    that waste tokens and can conflict with concise QA answering.
-    """
     answer_slots = "; ".join(f"answer{i}" for i in range(1, num_objectives + 1))
 
-    return f"""You are a QA agent that answers multiple sub-questions using search.
+    return f"""You are a multi-hop QA agent. The input contains multiple sub-questions separated by "; ".
+Answer them sequentially by actually calling `wikipedia_search`, then call `final_answer`.
 
-## Task Rules
-- You must answer ALL sub-questions. The questions are separated by semicolons (;).
-- Answer sub-questions sequentially, one at a time.
-- Use the wikipedia_search tool to find information before answering each sub-question.
-- When you have answers to all sub-questions, use the final_answer tool to submit them.
-- **CRITICAL**: Copy the answer phrase EXACTLY as it appears in the search result text. Do NOT rephrase, shorten, or drop adjectives. If the text says "edible tuber", write "edible tuber" — NOT "tubers" or "a tuber".
-- Keep answers concise but preserve key adjectives and specific terms from the source.
-- Separate your answers with semicolons in the same order as the sub-questions.
-- Do NOT add explanations, context, or extra words in the final answer.
+# Tools
+- `wikipedia_search(query: str, n_results: int = 3)` — searches the local 2018 Wikipedia retriever.
+- `final_answer(answer: str)` — submits the final answer.
 
-## Format
+# Mandatory Tool-Use Protocol
+For every search, you must use a real code block:
+
+<code>
+result = wikipedia_search(query="...", n_results=3)
+print(result)
+</code>
+
+Only an actual Observation produced after a `<code>` block counts as evidence.
+Do not write fake Search/Result text.
+
+# Core Rules
+For each sub-question, in order:
+1. Run one `wikipedia_search` call.
+2. Read the actual Observation.
+3. If the Observation clearly answers the sub-question, register the canonical answer and move to the next sub-question.
+4. Do not run confirmation searches after finding a clear answer.
+5. Use at most 3 searches per sub-question.
+6. If the first 2 searches fail, the 3rd query must be broader and centered on the main entity/topic.
+7. If 3 searches are exhausted, commit to the best candidate from observed results and move on.
+
+# Query Rules
+- Prefer entity-focused queries, e.g. "Asha Bhosle Guinness", not "most prolific singer ever".
+- Each query must be meaningfully different.
+- Use `n_results=3` by default.
+
+# Answer Rules
+- Use concise canonical answers: Wikipedia-title-like names or one-line factual answers.
+- Keep modifiers only when needed for correctness.
+- Do not include explanations, citations, dates, chapter/verse references, or extra context.
+- Final answers must be separated by "; " in the original sub-question order.
+
+# Answer Registration — mandatory
+Before moving from one question to the next, output exactly one plain-text marker:
+
+ANSWER_Q<number>: <canonical answer>
+
+
+Examples:
+ANSWER_Q1: Eva Lund
+ANSWER_Q2: September 1980
+
+Rules:
+- The marker is plain text, not a code block.
+- If an Observation clearly answers Q<number>, output `ANSWER_Q<number>: <canonical answer>`.
+- If Q<number> reaches 3 wikipedia_search calls, do not search that question again.
+- After 3 searches, if there is any usable candidate in the Observations, output `ANSWER_Q<number>: <best canonical candidate>`.
+- Never move to the next question without an ANSWER_Q marker for the current question.
+- Use the registered ANSWER_Q  marker to construct the final answer.
+
+# Final Answer
+Before calling `final_answer`, count your answers.
+The final answer must contain exactly one answer per sub-question.
+Never submit a partial answer.
+
+Use a real code block:
+
+<code>
 final_answer(answer="{answer_slots}")
+</code>
 
-## Execution Loop
-To solve tasks, follow a loop of Think and Code steps:
-
-1. Think: Decide which tool to use and what to search for.
-2. Code: Write Python code to call the tool. Use <code>code</code> tags for executable code.
-   - After execution, the system returns results with "Observation:" marker.
-   - Continue based on real observation results only — do NOT fabricate results.
-
-3. When you have all answers, call final_answer directly.
-
-## Available Tools
-- wikipedia_search(query: str, n_results: int = 3) — Search 2018 Wikipedia for relevant passages.
-- final_answer(answer: any) — Submit your final answer.
-
-## Code Rules
-1. Only use <code>code</code> for executable code.
-2. Use keyword arguments for tool calls: tool_name(param1="value1", param2="value2")
-3. Use print() to pass information between steps; printed content persists.
-4. Do NOT repeat the same search with identical parameters.
-5. Do NOT give up. Keep searching until you find the answer.
-
-## Example
-Task: "Where is the food stored in a yam plant?; Who plays Lefou in Beauty and the Beast 1991?"
-Think: I need to find where food is stored in a yam plant first.
-<code>result = wikipedia_search(query="yam plant food storage organ", n_results=3)
-print(result)</code>
-Observation: Yams are tuber crops... The edible tuber is the main storage organ...
-Think: The answer is "edible tuber" — I must keep the adjective. Now search for Lefou's voice actor.
-<code>result = wikipedia_search(query="Lefou voice actor Beauty and the Beast 1991", n_results=3)
-print(result)</code>
-Observation: Lefou was voiced by Jesse Corti in the 1991 animated film...
-Think: The answer is "Jesse Corti".
-<code>final_answer(answer="edible tuber; Jesse Corti")</code>
-
-Now start! Answer all sub-questions with short, precise phrases from the search results."""
-
+Now begin.
+"""
 
 def _sanitize_for_path(name: str) -> str:
     return ''.join(ch if ch.isalnum() or ch in ('-', '_', '.') else '-' for ch in name)
@@ -150,6 +163,7 @@ async def run_sample(
         agent_description="ACON multi-objective QA agent",
         language="en",
         context_manager_config=cm_config,
+        temperature=0
     )
 
     # Attach shared ContextManager if mode is context_manager
@@ -251,6 +265,71 @@ async def main(
     # ContextManager config based on mode
     cm_config = None
     if mode == "context_manager":
+        # Custom summary JSON schema that emphasizes task progress tracking
+        custom_summary_schema = {
+            "n_questions": "Total number of sub-questions.",
+            "answers": (
+                "Ordered list of final-answer candidates. Length must equal n_questions. "
+                "Each item is either an exact canonical answer string or 'Unknown'. "
+            ),
+            "status": (
+                "Array of length n_questions. Each item must be one of: "
+                "'unstarted', 'searching', 'answered', 'exhausted'. "
+                "answered requires a non-null answer other than 'Unknown'. or null"
+                "exhausted requires answer that need to be inferred."
+            ),
+            "search_counts": (
+                "Array of integers of length n_questions. "
+                "Count only actual wikipedia_search calls."
+            ),
+            "current_q": (
+                "The 1-based index of the next question to solve. "
+                "Usually the first index whose status is not 'answered' or 'exhausted'."
+            ),
+            "pending_q": (
+                "List of question numbers whose status is 'unstarted' or 'searching'. "
+                "Do not include answered or exhausted questions."
+            ),
+            "next_action": (
+                "One direct mechanical next step. Example: "
+                "'Run wikipedia_search for Q5: Ash Wednesday ashes palm leaves'."
+            ),
+        }
+        # Custom summary system prompt that emphasizes multi-question task tracking
+        custom_incremental_summary_system_prompt = (
+            "Update the compact QA checkpoint based on the latest agent action. "
+            "Output only strict JSON matching the schema. No markdown.\n\n"
+            "Treat ANSWER_Q<number>: ... marker as authoritative."
+            "Never replace an ANSWER_Q value with null or Unknown."
+            "INCREMENTAL UPDATE RULES:\n"
+            "- Preserve all existing answered values unless new evidence explicitly corrects them.\n"
+            "- Never change an answered value to null or 'Unknown'.\n"
+            "- If the latest action executed wikipedia_search, increment only that question's search_counts entry.\n"
+            "- If the latest observation clearly answers the current question, write the canonical answer into answers and set status to 'answered'.\n"
+            "- If search_counts for a question reaches 3 and no usable answer candidate exists, infer the most probable answer, set and status to 'exhausted'.\n"
+            "- Otherwise, leave answer as null and status as 'searching'.\n"
+            "- pending_q must contain exactly the question numbers with status 'unstarted' or 'searching'.\n"
+            "- current_q should be the first pending question.\n"
+            "- Overwrite the old state completely. Do not append logs, snippets, or history."
+        )
+
+        custom_summary_system_prompt = (
+            "You are creating a compact execution checkpoint for a sequential multi-question QA agent. "
+            "Output only strict JSON matching the schema. No markdown, greetings, or backticks.\n\n"
+            "Treat ANSWER_Q<number>: ... marker as authoritative."
+            "Never replace an ANSWER_Q value with null or Unknown."
+            "STATE RULES:\n"
+            "- Preserve exact canonical answer strings when they are explicitly available.\n"
+            "- answers, status, and search_counts must all have length n_questions.\n"
+            "- status must be consistent with answers:\n"
+            "  * unstarted/searching => answer is null\n"
+            "- pending_q must contain exactly the question numbers with status 'unstarted' or 'searching'.\n"
+            "- current_q should be the first question whose status is 'unstarted' or 'searching', unless the recent trajectory clearly shows another active question.\n\n"
+
+            "COMPACTION RULES:\n"
+            "- Strip raw search logs, snippets, long reasons, file status, and failed query history.\n"
+            "- Keep the checkpoint short and stable. Do not append history."
+        )
         cm_config = ContextManagerConfig(
             enabled=True,
             token_threshold=token_threshold,
@@ -258,6 +337,9 @@ async def main(
             keep_recent_steps=keep_recent_steps,
             max_observation_length=max_observation_length,
             enable_reload=enable_reload,
+            summary_json_schema=custom_summary_schema,
+            summary_system_prompt=custom_summary_system_prompt,
+            incremental_summary_system_prompt=custom_incremental_summary_system_prompt,
         )
     else:
         # baseline: no compression
@@ -402,7 +484,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=30, help="Max agent steps per question")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of examples")
     parser.add_argument("--retriever_port", type=str, default="8005", help="ACON retriever server port")
-    parser.add_argument("--token_threshold", type=int, default=12000, help="ContextManager token threshold (for context_manager mode)")
+    parser.add_argument("--token_threshold", type=int, default=4800, help="ContextManager token threshold (for context_manager mode)")
     parser.add_argument("--keep_recent_pairs", type=int, default=1, help="ContextManager keep_recent_pairs (for context_manager mode)")
     parser.add_argument("--keep_recent_steps", type=int, default=4, help="ContextManager keep_recent_steps (for context_manager mode)")
     parser.add_argument("--max_observation_length", type=int, default=20000, help="Max observation length in chars (for context_manager mode)")
