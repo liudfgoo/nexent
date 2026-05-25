@@ -540,8 +540,9 @@ class ContextManager:
                 compressed_msgs = self._build_messages(
                     memory, prev_summary_step, prev_tail_steps, curr_kept_steps
                 )
+                self._last_uncompressed_token_count = self._msg_token_count(original_messages)
                 self._last_compressed_token_count = self._msg_token_count(compressed_msgs)
-                return compressed_msgs 
+                return compressed_msgs
 
             self._step_local_log.clear()
 
