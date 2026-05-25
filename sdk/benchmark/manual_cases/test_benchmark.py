@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import paths  # noqa: F401 — side-effect: adds sdk/, backend/ to sys.path
 
 from agent_runner import (
-    build_agent_run_info,
+    build_agent_run_info_with_custom_prompt,
     run_agent_with_tracking,
     parse_conversation_to_history,
     AgentHistory,
@@ -22,6 +22,19 @@ from nexent.core.utils.token_estimation import estimate_tokens_text
 
 from eval_utils import eval_text, average_score
 
+# Lean benchmark system prompt — generic, not task-specific.
+# Strips the verbose platform scaffolding (File URL Guide, Reference Marks,
+# safety principles, etc.) to minimize token overhead while retaining the
+# core execution loop instructions the agent needs to function.
+BENCHMARK_SYSTEM_PROMPT = """You are a helpful assistant. Answer the user's questions based on the conversation history and your knowledge.
+
+- Be precise and concise.
+- When the answer depends on information from earlier conversation, refer to it accurately.
+- Do not fabricate information you do not know.
+- Use final_answer to submit your response.
+
+Now start!"""
+
 
 def history_to_text(history: list[AgentHistory]) -> str:
     return "\n".join([f"{h.role}: {h.content}" for h in history])
@@ -32,6 +45,7 @@ async def run_multi_turn_for_benchmark(
     base_history: list[AgentHistory],
     cm_config: ContextManagerConfig,
     max_steps: int = 5,
+    system_prompt: str = BENCHMARK_SYSTEM_PROMPT,
 ):
     conversation_history = list(base_history)
     results = []
@@ -46,8 +60,9 @@ async def run_multi_turn_for_benchmark(
     step_input_tokens = []
 
     for query in queries:
-        agent_run_info = build_agent_run_info(
+        agent_run_info = build_agent_run_info_with_custom_prompt(
             query,
+            system_prompt,
             conversation_history,
             max_steps=max_steps,
             context_manager_config=cm_config,
@@ -149,6 +164,7 @@ async def run_probe_questions(
     probes: list[dict],
     precompressed_history: list[AgentHistory],
     max_steps: int = 5,
+    system_prompt: str = BENCHMARK_SYSTEM_PROMPT,
 ):
     """Run probe questions against a pre-compressed history snapshot.
 
@@ -173,8 +189,9 @@ async def run_probe_questions(
         # Each probe gets its own deep copy — fully independent
         probe_history = copy.deepcopy(precompressed_history)
 
-        agent_run_info = build_agent_run_info(
+        agent_run_info = build_agent_run_info_with_custom_prompt(
             question,
+            system_prompt,
             probe_history,
             max_steps=max_steps,
             context_manager_config=no_compression_config,
@@ -200,6 +217,7 @@ async def run_baseline_probes(
     probes: list[dict],
     frozen_history: list[AgentHistory],
     max_steps: int = 5,
+    system_prompt: str = BENCHMARK_SYSTEM_PROMPT,
 ):
     """Run probe questions against full uncompressed history (baseline).
 
@@ -213,8 +231,9 @@ async def run_baseline_probes(
         question = probe["question"]
         probe_history = copy.deepcopy(frozen_history)
 
-        agent_run_info = build_agent_run_info(
+        agent_run_info = build_agent_run_info_with_custom_prompt(
             question,
+            system_prompt,
             probe_history,
             max_steps=max_steps,
             context_manager_config=baseline_config,
@@ -349,7 +368,6 @@ async def run_one_case(case_dir: str):
 
     baseline_task_eval = eval_task_outputs(case, baseline["results"])
     compressed_task_eval = eval_task_outputs(case, compressed["results"])
-
     # P1: Baseline probe — agent sees full uncompressed history
     # Same frozen_history, but with compression disabled, so the agent sees
     # the complete unmodified context. This establishes the ceiling for
@@ -432,7 +450,28 @@ async def run_one_case(case_dir: str):
         token_reduction = 1 - (
             compressed["final_tokens"] / max(baseline["final_tokens"], 1)
         )
-    baseline_failed = baseline_task_score == 0 
+    baseline_failed = baseline_task_score == 0
+
+    # Compute real main-LLM input token totals
+    baseline_real_input = sum(r.total_input_tokens for r in baseline["results"])
+    compressed_real_input = sum(r.total_input_tokens for r in compressed["results"])
+
+    # Compression cost: tokens spent on compression LLM calls
+    compression_cost = 0
+    if compressed.get("cm_stats"):
+        compression_cost = (
+            compressed["cm_stats"].get("total_input_tokens", 0)
+            + compressed["cm_stats"].get("total_output_tokens", 0)
+        )
+
+    # Net token reduction = gross savings - compression cost
+    gross_input_savings = baseline_real_input - compressed_real_input
+    net_input_savings = gross_input_savings - compression_cost
+    net_token_reduction = (
+        net_input_savings / max(baseline_real_input, 1)
+        if baseline_real_input > 0
+        else 0.0
+    )
 
     report = {
         "case_id": case["id"],
@@ -441,6 +480,7 @@ async def run_one_case(case_dir: str):
             "task_score": baseline_task_score,
             "probe_score": baseline_probe_score,
             "final_tokens": baseline["final_tokens"],
+            "real_input_tokens": baseline_real_input,
         },
         "compressed": {
             "task_score": compressed_task_score,
@@ -449,11 +489,14 @@ async def run_one_case(case_dir: str):
             "cm_stats": compressed["cm_stats"],
             "cm_token_counts": compressed["cm_token_counts"],
             "cm_summary": compressed["cm_summary"],
+            "real_input_tokens": compressed_real_input,
         },
         "metrics": {
             "task_success_retention": task_success_retention,
             "probe_retention": probe_retention,
             "token_reduction": token_reduction,
+            "net_token_reduction": net_token_reduction,
+            "compression_cost_tokens": compression_cost,
             "summary_score": summary_score,
         },
         "task_eval": compressed_task_eval,
@@ -498,7 +541,7 @@ async def main(case_names: list[str] = None):
         print(f"  Report saved to {per_case_path}")
     
     # Exclude cases where baseline itself failed
-    valid_reports = [r for r in reports if not r.get["baseline_failed"]]
+    valid_reports = [r for r in reports if not r.get("baseline_failed")]
     excluded_ids = [r["case_id"] for r in reports if r.get("baseline_failed")]
     if excluded_ids:
         print(f"\n  Excluded from average (baseline failed): {excluded_ids}")
@@ -515,6 +558,12 @@ async def main(case_names: list[str] = None):
             ) / max(len(valid_reports), 1),
             "avg_token_reduction": sum(
                 r["metrics"]["token_reduction"] for r in valid_reports
+            ) / max(len(valid_reports), 1),
+            "avg_net_token_reduction": sum(
+                r["metrics"]["net_token_reduction"] for r in valid_reports
+            ) / max(len(valid_reports), 1),
+            "avg_compression_cost_tokens": sum(
+                r["metrics"]["compression_cost_tokens"] for r in valid_reports
             ) / max(len(valid_reports), 1),
             "per_case": {
                 r["case_id"]: r["metrics"] for r in reports
