@@ -49,6 +49,16 @@ LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME")
 LLM_API_URL = os.getenv("LLM_API_URL")
 
+# Disable model thinking for benchmark runs. Both vendor dialects are kept in
+# one payload so the same agent_runner.py works against either backend without
+# code changes: Qwen-on-vLLM/SGLang reads `chat_template_kwargs.enable_thinking`
+# and ignores `thinking`; Anthropic reads `thinking.type` and ignores
+# `chat_template_kwargs`. Unknown keys are silently dropped by each provider.
+THINKING_OFF_EXTRA_BODY = {
+    "chat_template_kwargs": {"enable_thinking": False},
+    "thinking": {"type": "disabled"},
+}
+
 APP_NAME = os.getenv("APP_NAME", "Nexent")
 APP_DESCRIPTION = os.getenv("APP_DESCRIPTION", "Nexent 是一个开源智能体SDK和平台")
 
@@ -222,6 +232,7 @@ def build_agent_run_info(
         url=LLM_API_URL,
         temperature=temperature,
         ssl_verify=False,
+        extra_body=THINKING_OFF_EXTRA_BODY,
     )
 
     if duty or constraint or few_shots:
@@ -324,10 +335,7 @@ def build_agent_run_info_with_custom_prompt(
         url=LLM_API_URL,
         temperature=temperature,
         ssl_verify=False,
-        # extra_body={"chat_template_kwargs": {"enable_thinking": False}}  
-        extra_body={
-            "thinking": {"type": "disabled"}
-        }
+        extra_body=THINKING_OFF_EXTRA_BODY,
         )
 
     prompt_templates = build_prompt_templates(
