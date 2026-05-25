@@ -36,6 +36,78 @@ BENCHMARK_SYSTEM_PROMPT = """You are a helpful assistant. Answer the user's ques
 Now start!"""
 
 
+# --- Custom summary schema and prompts for knowledge-discussion benchmarks ---
+# These override the default 10-field Hermes schema from summary_config.py
+# with a leaner 7-field schema (~800 word budget vs ~1600) and incremental
+# prompts that enforce MERGE+CONDENSE (not append) to prevent linear output growth.
+
+BENCHMARK_SUMMARY_SCHEMA = {
+    "active_task": "User's most recent unfulfilled request, or 'None'. (<=50 words)",
+    "goal": "Overall objective of the conversation. (<=50 words)",
+    "completed_work": "Numbered list of topics discussed and conclusions reached. Be specific with numbers, names, and domain terms. (<=200 words)",
+    "resolved_questions": "Questions already answered with their key answers. Preserve exact numbers and terms. (<=150 words)",
+    "active_state": "Current state of discussion, what has been established. (<=50 words)",
+    "pending_items": "Unresolved questions or pending requests. If none, write 'None'. (<=50 words)",
+    "critical_context": "Specific values, data points, domain terms, and exact numbers that would be lost without explicit preservation. This is the most important field for retaining factual detail. (<=250 words)",
+}
+
+BENCHMARK_SUMMARY_SYSTEM_PROMPT = (
+    "You are a summarization agent creating a context checkpoint. "
+    "Treat the conversation turns below as source material for a compact record of prior work. "
+    "Produce only the structured JSON summary; do not add a greeting, preamble, or prefix. "
+    "Write the summary in the same language the user was using in the conversation — "
+    "do not translate or switch to English. "
+    "NEVER include API keys, tokens, passwords, secrets, credentials, or connection strings "
+    "in the summary — replace any that appear with [REDACTED]. Note that the user had "
+    "credentials present, but do not preserve their values. "
+    "Information priority: Critical (task, goal, constraints) > "
+    "Operational (completed actions, active state) > Reference (files, decisions). "
+    "Be CONCRETE — include specific values, data points, and domain terms. "
+    "Avoid vague descriptions like 'discussed some numbers' — preserve exact numbers "
+    "(e.g., '14 SOTA improvements', 'rank 48', '56 years') verbatim — these are critical for later recall.\n\n"
+    "The total output must not exceed 800 words. Condense rather than enumerate. "
+    "Create a structured checkpoint summary for the conversation. The summary should preserve "
+    "enough detail for continuity without re-reading the original turns. "
+    "Output strict JSON format without markdown blocks."
+)
+
+BENCHMARK_INCREMENTAL_SUMMARY_SYSTEM_PROMPT = (
+    "You are a summarization agent creating a context checkpoint. "
+    "Treat the conversation turns below as source material for a compact record of prior work. "
+    "Produce only the structured JSON summary; do not add a greeting, preamble, or prefix. "
+    "Write the summary in the same language the user was using in the conversation — "
+    "do not translate or switch to English. "
+    "NEVER include API keys, tokens, passwords, secrets, credentials, or connection strings "
+    "in the summary — replace any that appear with [REDACTED]. Note that the user had "
+    "credentials present, but do not preserve their values. "
+    "Information priority: Critical (task, goal, constraints) > "
+    "Operational (completed actions, active state) > Reference (files, decisions). "
+    "Be CONCRETE — include specific values, data points, and domain terms. "
+    "Avoid vague descriptions like 'discussed some numbers' — preserve exact numbers "
+    "and domain terms verbatim.\n\n"
+    "You are updating an existing context compaction summary. A previous compaction produced "
+    "the summary shown as 'Previous Summary'. New conversation turns have occurred since then "
+    "and are shown as 'New Content'. Update the summary by following these rules:\n"
+    "1. MERGE and CONDENSE: Integrate old and new information — do NOT simply append new content "
+    "to the old summary. When new information supersedes or refines old information, replace "
+    "the old with the new rather than keeping both. Old details that are redundant with new "
+    "information should be merged, not duplicated.\n"
+    "2. ADD new conclusions and answered questions to the appropriate fields.\n"
+    "3. UPDATE 'active_state' to reflect the current state of discussion.\n"
+    "4. UPDATE 'active_task' to reflect the user's most recent unfulfilled request.\n"
+    "5. UPDATE 'pending_items': move resolved items out, add new pending items.\n"
+    "6. UPDATE 'critical_context' with any new specific values, data points, or domain terms "
+    "that must be preserved verbatim.\n"
+    "7. The updated summary must NOT exceed 800 words total. If merging new content would "
+    "exceed this limit, condense older or lower-priority information first. The summary size "
+    "must stay approximately constant across incremental updates — do NOT let it grow linearly.\n"
+    "8. Compress by substitution: when new information supersedes old, replace the old entry "
+    "entirely rather than keeping both versions.\n"
+    "9. Preserve exact numbers and domain terms verbatim — these are critical for later recall.\n"
+    "10. Output the complete updated summary as strict JSON without markdown blocks."
+)
+
+
 def history_to_text(history: list[AgentHistory]) -> str:
     return "\n".join([f"{h.role}: {h.content}" for h in history])
 
@@ -44,7 +116,7 @@ async def run_multi_turn_for_benchmark(
     queries: list[str],
     base_history: list[AgentHistory],
     cm_config: ContextManagerConfig,
-    max_steps: int = 5,
+    max_steps: int = 20,
     system_prompt: str = BENCHMARK_SYSTEM_PROMPT,
 ):
     conversation_history = list(base_history)
@@ -163,7 +235,7 @@ def build_precompressed_history(
 async def run_probe_questions(
     probes: list[dict],
     precompressed_history: list[AgentHistory],
-    max_steps: int = 5,
+    max_steps: int = 20,
     system_prompt: str = BENCHMARK_SYSTEM_PROMPT,
 ):
     """Run probe questions against a pre-compressed history snapshot.
@@ -216,7 +288,7 @@ async def run_probe_questions(
 async def run_baseline_probes(
     probes: list[dict],
     frozen_history: list[AgentHistory],
-    max_steps: int = 5,
+    max_steps: int = 20,
     system_prompt: str = BENCHMARK_SYSTEM_PROMPT,
 ):
     """Run probe questions against full uncompressed history (baseline).
@@ -307,19 +379,26 @@ def eval_task_outputs(case: dict, run_outputs: list):
     return eval_results
 
 
-def _resolve_compressed_config(case: dict) -> ContextManagerConfig:
+def _resolve_compressed_config(case: dict, use_custom_prompts: bool = False) -> ContextManagerConfig:
     """Build compressed config from case definition, with sensible defaults."""
     case_cfg = case.get("compressed_config", {})
-    return ContextManagerConfig(
+    kwargs = dict(
         enabled=True,
         token_threshold=case_cfg.get("token_threshold", 3600),
         keep_recent_pairs=case_cfg.get("keep_recent_pairs", 1),
         keep_recent_steps=case_cfg.get("keep_recent_steps", 4),
         max_observation_length=case_cfg.get("max_observation_length", 20000),
     )
+    if use_custom_prompts:
+        kwargs.update(
+            summary_json_schema=BENCHMARK_SUMMARY_SCHEMA,
+            summary_system_prompt=BENCHMARK_SUMMARY_SYSTEM_PROMPT,
+            incremental_summary_system_prompt=BENCHMARK_INCREMENTAL_SUMMARY_SYSTEM_PROMPT,
+        )
+    return ContextManagerConfig(**kwargs)
 
 
-async def run_one_case(case_dir: str):
+async def run_one_case(case_dir: str, use_custom_prompts: bool = False):
     """Load and run a single benchmark case from its directory.
 
     Each case directory contains:
@@ -350,7 +429,7 @@ async def run_one_case(case_dir: str):
     )
 
     # P5: Allow per-case config override
-    compressed_config = _resolve_compressed_config(case)
+    compressed_config = _resolve_compressed_config(case, use_custom_prompts=use_custom_prompts)
 
     print(f"\n===== CASE: {case['id']} =====")
 
@@ -375,7 +454,7 @@ async def run_one_case(case_dir: str):
     baseline_probe_eval = await run_baseline_probes(
         probes=case["probes"],
         frozen_history=compressed["conversation_history"],
-        max_steps=5,
+        max_steps=20,
     )
 
     # P0: Compressed probe — agent sees pre-compressed context
@@ -511,7 +590,7 @@ async def run_one_case(case_dir: str):
     return report
 
 
-async def main(case_names: list[str] = None):
+async def main(case_names: list[str] = None, use_custom_prompts: bool = False):
     # Discover cases: use specified names if provided, otherwise find all cases under ./cases/*/case.json
     if case_names:
         case_dirs = [os.path.join("./cases", name) for name in case_names]
@@ -530,7 +609,7 @@ async def main(case_names: list[str] = None):
 
     reports = []
     for case_dir in case_dirs:
-        report = await run_one_case(case_dir)
+        report = await run_one_case(case_dir, use_custom_prompts=use_custom_prompts)
         reports.append(report)
 
         # Write per-case report
@@ -584,5 +663,10 @@ if __name__ == "__main__":
         help="Specific case names to run (e.g. --cases example_infra algotithm_data)."
              "if omitted, run all cases under .cases/."
     )
+    parser.add_argument(
+        "--custom-prompts", action="store_true", default=False,
+        help="Use custom summary schema and prompts optimized for knowledge-discussion benchmarks "
+             "(leaner 7-field schema with 800-word cap and merge-condense incremental updates)."
+    )
     args = parser.parse_args()
-    asyncio.run(main(case_names = args.cases))
+    asyncio.run(main(case_names=args.cases, use_custom_prompts=args.custom_prompts))
