@@ -35,14 +35,14 @@ Both arms answer the SAME questions, so the retention ratio is clean:
 
 Continuation is not measured — LongMemEval questions are independent.
 
-Default scope is 5 dialogues x 20 questions (a 100-question sample) for
-quick smoke runs; --limit 60 expands to the full 300-question benchmark.
+Default scope is the full benchmark: 5 dialogues x 60 questions = 300 Q.
+Pass --limit 20 (or any smaller value) to sample for quick iteration.
 
 Usage:
     python download_data.py            # one-time: fetch the dataset
     python run_longmemeval.py --dialogue_index 0 --limit 1   # smoke
-    python run_longmemeval.py --limit 20                     # default sample
-    python run_longmemeval.py --limit 60                     # full 300 Q
+    python run_longmemeval.py --limit 20                     # 100-Q sample
+    python run_longmemeval.py                                # full 300 Q
 
 Results are written to outputs/<dialogue_id>/ and outputs/summary.json.
 """
@@ -492,7 +492,7 @@ async def main(args):
     print(f"LongMemEval (S*) Benchmark (nexent agent)")
     print(f"{'=' * 60}")
     print(f"  Dialogues:               {len(dialogues)}")
-    print(f"  Questions per dialogue:  {args.limit or 'all (60)'}")
+    print(f"  Questions per dialogue:  {args.limit if args.limit else 'all (60)'}")
     print(f"  Token threshold:         {args.token_threshold}")
     print(f"  Sessions per batch:      {args.sessions_per_batch}")
     print(f"  Keep recent pairs:       {args.keep_recent_pairs}")
@@ -555,7 +555,7 @@ async def main(args):
 
     summary = {
         "total_dialogues": len(reports),
-        "questions_per_dialogue": args.limit or 60,
+        "questions_per_dialogue": args.limit if args.limit else 60,
         "summary_schema": args.summary_schema,
         "judge": "JUDGE_*" if judge_configured() else "LLM_*",
         "avg_baseline_accuracy": overall_baseline,
@@ -603,15 +603,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Run only first N dialogues (default: all 5)")
     p.add_argument("--dialogue_index", type=int, default=None,
                    help="Run only the dialogue at this index (0-4); overrides --dialogue_limit")
-    p.add_argument("--limit", type=int, default=20,
-                   help="Questions per dialogue (default 20 — sample; use 60 for full)")
+    p.add_argument("--limit", type=int, default=60,
+                   help="Questions per dialogue (default 60 — full; set lower for sampling)")
     p.add_argument("--summary_schema", type=str, default="default",
                    choices=["default", "multi_topic"],
                    help="Summary schema: 'default' (active_task) or 'multi_topic' (preserve all topics)")
     # ContextManager
     p.add_argument("--token_threshold", type=int, default=12000)
-    p.add_argument("--keep_recent_pairs", type=int, default=10,
-                   help="Recent pairs to preserve uncompressed (default 10)")
+    p.add_argument("--keep_recent_pairs", type=int, default=2,
+                   help="Recent (user, assistant) pairs preserved uncompressed "
+                        "(default 2 — matches SDK ContextManagerConfig). "
+                        "Larger values keep more raw turns out of compression — "
+                        "e.g. 4 is a safer choice when probes ask about the "
+                        "MOST RECENT session, but inflates last_compressed tokens.")
     p.add_argument("--keep_recent_steps", type=int, default=4)
     p.add_argument("--max_observation_length", type=int, default=20000)
     # Ingest shaping

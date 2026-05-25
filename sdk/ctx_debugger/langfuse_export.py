@@ -145,7 +145,15 @@ def _push_session_aggregates(client, session_id: str, summary: dict) -> int:
             print(f"  warn: failed to push {name}={value}: {e}", file=sys.stderr)
 
     _push("baseline_accuracy", (summary.get("baseline") or {}).get("accuracy"))
-    for schema, c in (summary.get("compressed") or {}).items():
+    compressed = summary.get("compressed") or {}
+    # EventQA: compressed = {"narrative": {accuracy, memory_retention, ...}, "default": {...}}
+    # LongMemEval: compressed = {accuracy, memory_retention, token_reduction, ...} flat
+    if "accuracy" in compressed or "memory_retention" in compressed:
+        schema_label = summary.get("summary_schema") or "default"
+        compressed = {schema_label: compressed}
+    for schema, c in compressed.items():
+        if not isinstance(c, dict):
+            continue
         _push(f"compressed_accuracy_{schema}", c.get("accuracy"))
         _push(f"memory_retention_{schema}", c.get("memory_retention"))
         _push(f"token_reduction_{schema}", c.get("token_reduction"))
@@ -153,13 +161,23 @@ def _push_session_aggregates(client, session_id: str, summary: dict) -> int:
 
 
 def _classify_probe_arm(events: List[dict]) -> str:
-    """compressed vs baseline — detect by the 'Here is the novel' marker."""
+    """compressed vs baseline — detect by the baseline-arm marker.
+
+    EventQA uses 'Here is the novel'; LongMemEval uses 'Here is the full
+    multi-session chat history'. Both arms send the FULL raw text in the
+    baseline turn, while the compressed turn carries a 'Summary of earlier
+    sessions' / narrative summary instead.
+    """
+    BASELINE_MARKERS = (
+        "Here is the novel",
+        "Here is the full multi-session chat history",
+    )
     for ev in events:
         if ev.get("event") != "llm_call_begin":
             continue
         for m in ev.get("data", {}).get("input_messages", []) or []:
             txt = m.get("text") or m.get("preview") or ""
-            if "Here is the novel" in txt:
+            if any(marker in txt for marker in BASELINE_MARKERS):
                 return "baseline"
         break
     return "compressed"
@@ -390,12 +408,17 @@ def _push_probe_score(client, turn: dict, trace_id: str, benchmark_data: dict,
     row = preds[idx]
     if arm == "compressed":
         compressed_block = row.get("compressed") or {}
-        # First schema present (single-schema case) — for multi-schema use the
-        # session-level score breakdown to disambiguate.
         if not compressed_block:
             return comp_idx + 1, base_idx
-        schema = next(iter(compressed_block.keys()))
-        arm_pred = compressed_block[schema]
+        # EventQA nests by schema: compressed = {"narrative": {...}, "default": {...}}.
+        # LongMemEval is flat: compressed = {"answer": ..., "correct": ..., "judge_label": ...}.
+        # Distinguish by whether the block carries arm-pred fields directly.
+        if "correct" in compressed_block or "answer" in compressed_block:
+            arm_pred = compressed_block
+            schema = "default"
+        else:
+            schema = next(iter(compressed_block.keys()))
+            arm_pred = compressed_block[schema]
         meta = {"arm": "compressed", "schema": schema,
                 "qid": row.get("qid"), "match_type": arm_pred.get("match_type")}
     else:

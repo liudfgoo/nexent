@@ -299,39 +299,42 @@ async def run_probes(items, history: list[AgentHistory], args) -> list[dict]:
 
     Compression is disabled — the history is already in its final form
     (pre-compressed summary, or truncated novel). Each probe gets its own
-    deep copy and runs fully independently.
+    deep copy and runs fully independently, so we can fan them out under
+    a bounded semaphore (--probe_concurrency). Result order is preserved
+    via asyncio.gather and matches the items order.
     """
     disabled_cm = ContextManagerConfig(enabled=False, token_threshold=10 ** 9)
-    results: list[dict] = []
+    concurrency = max(1, args.probe_concurrency)
+    sem = asyncio.Semaphore(concurrency)
 
-    for it in items:
-        probe_history = copy.deepcopy(history)
-        run_info = build_agent_run_info(
-            it.question,
-            probe_history,
-            duty_prompt=PROBE_DUTY,
-            max_steps=args.probe_max_steps,
-            context_manager_config=disabled_cm,
-            language="en",
-            agent_name="eventqa_answerer",
-            agent_description="EventQA multiple-choice answering agent",
-        )
-        result = await run_agent_with_tracking(run_info, debug=args.debug)
-        mcq = score_mcq(result.final_answer, it.options, it.gold)
+    async def _one(it):
+        async with sem:
+            probe_history = copy.deepcopy(history)
+            run_info = build_agent_run_info(
+                it.question,
+                probe_history,
+                duty_prompt=PROBE_DUTY,
+                max_steps=args.probe_max_steps,
+                context_manager_config=disabled_cm,
+                language="en",
+                agent_name="eventqa_answerer",
+                agent_description="EventQA multiple-choice answering agent",
+            )
+            result = await run_agent_with_tracking(run_info, debug=args.debug)
+            mcq = score_mcq(result.final_answer, it.options, it.gold)
+            return {
+                "qid": it.qid,
+                "answer": result.final_answer,
+                "selected_index": mcq.selected_index,
+                "selected": mcq.selected,
+                "gold": it.gold,
+                "gold_index": mcq.gold_index,
+                "correct": mcq.correct,
+                "score": mcq.score,
+                "match_type": mcq.match_type,
+            }
 
-        results.append({
-            "qid": it.qid,
-            "answer": result.final_answer,
-            "selected_index": mcq.selected_index,
-            "selected": mcq.selected,
-            "gold": it.gold,
-            "gold_index": mcq.gold_index,
-            "correct": mcq.correct,
-            "score": mcq.score,
-            "match_type": mcq.match_type,
-        })
-
-    return results
+    return await asyncio.gather(*(_one(it) for it in items))
 
 
 # ============ Per-book run ============
@@ -553,7 +556,12 @@ async def main(args):
             for r in reports
         },
     }
-    summary_path = os.path.join(outputs_root, "summary.json")
+    summary_name = (
+        f"summary_{args.book_index}.json"
+        if args.book_index is not None
+        else "summary.json"
+    )
+    summary_path = os.path.join(outputs_root, summary_name)
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
 
@@ -605,6 +613,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         help="Max agent steps per ingest (acknowledge) run")
     parser.add_argument("--probe_max_steps", type=int, default=3,
                         help="Max agent steps for each question-answering probe")
+    parser.add_argument("--probe_concurrency", type=int, default=5,
+                        help="Bounded asyncio concurrency for probe LLM calls "
+                             "(default 5; set 1 for serial). Only affects probes — "
+                             "ingest stays serial since compressions are ordered.")
     parser.add_argument("--skip_baseline", action="store_true",
                         help="Skip the baseline arm (compressed-only iteration)")
     parser.add_argument("--skip_compressed", action="store_true",

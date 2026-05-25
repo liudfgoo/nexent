@@ -67,11 +67,11 @@ python run_longmemeval.py \
     --token_threshold 3000 --keep_recent_pairs 1 \
     --baseline_context_chars 40000
 
-# 默认抽样：5 个对话 × 20 题 = 100 题
+# 默认全量：5 个对话 × 60 题 = 300 题
 python run_longmemeval.py
 
-# 完整：5 个对话 × 60 题 = 300 题
-python run_longmemeval.py --limit 60
+# 抽样：5 个对话 × 20 题 = 100 题（迭代调参用）
+python run_longmemeval.py --limit 20
 ```
 
 ---
@@ -85,14 +85,14 @@ python run_longmemeval.py --limit 60
 | `--data_file` | `data/longmemeval_s_star.jsonl` | 下载脚本产出的数据 |
 | `--dialogue_limit` | 全部（5）| 只跑前 N 个对话 |
 | `--dialogue_index` | 无 | 只跑某个特定下标的对话（0-4），覆盖 `--dialogue_limit` |
-| `--limit` | **20** | 每对话只跑前 N 题（**默认抽样**；设 60 跑完整 300 题）|
+| `--limit` | **60** | 每对话题数（默认跑全部 60 题/对话 = 300 题完整集；设小值用于抽样） |
 
 ### 压缩臂：ContextManager 配置
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
 | `--token_threshold` | `12000` | 累计上下文超过该 token 数触发压缩，越小压缩越激进 |
-| `--keep_recent_pairs` | `2` | 尾部保留多少对 (user, assistant) 不压缩 |
+| `--keep_recent_pairs` | `2` | 尾部保留多少对 (user, assistant) 不压缩（与 SDK 默认一致；测试中可调到 4） |
 | `--keep_recent_steps` | `4` | ContextManager 单轮内保留 step 数 |
 | `--max_observation_length` | `20000` | 单条 observation 字符上限 |
 | `--sessions_per_batch` | `4` | 每个 ingest batch 装多少个 atomic session（越大压缩轮数越少、单轮输入越大）|
@@ -175,7 +175,7 @@ outputs/
 
 - **Self-judging bias**：默认 fallback 用 LLM_* 同款模型做判官，数字偏乐观。
   做正式对比时建议单独配 `JUDGE_*`（外部强模型如 GPT-4o）。
-- **抽样 vs 完整**：默认 `--limit 20`（5 × 20 = 100 题）适合迭代；要正式数字
-  跑 `--limit 60`（5 × 60 = 300 题）。
+- **抽样 vs 完整**：默认 `--limit 60`（5 × 60 = 300 题，完整集）；要快速迭代调参可
+  设 `--limit 20`（5 × 20 = 100 题）。
 - **ingest 是固定成本**：跟 `--limit` 无关——整个对话历史都得压一遍。
 - 数据下载若 HF SSL 抖动会自动 fallback 到本地缓存。

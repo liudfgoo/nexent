@@ -4,13 +4,13 @@
   "summary_schema": "multi_topic",
   "judge": "LLM_*",
   "avg_baseline_accuracy": 0.4,
-  "avg_compressed_accuracy": 0.2,
-  "avg_memory_retention": 0.5,
-  "avg_token_reduction": 0.06339814444455283,
+  "avg_compressed_accuracy": 0.5,
+  "avg_memory_retention": 1.25,
+  "avg_token_reduction": 0.06782240519789662,
   "per_category": {
     "knowledge-update": {
       "avg_baseline_accuracy": 0.0,
-      "avg_compressed_accuracy": 0.0,
+      "avg_compressed_accuracy": 0.5,
       "avg_memory_retention": null
     },
     "multi-session": {
@@ -20,8 +20,8 @@
     },
     "single-session-assistant": {
       "avg_baseline_accuracy": 1.0,
-      "avg_compressed_accuracy": 0.0,
-      "avg_memory_retention": 0.0
+      "avg_compressed_accuracy": 1.0,
+      "avg_memory_retention": 1.0
     },
     "single-session-preference": {
       "avg_baseline_accuracy": 0.0,
@@ -30,17 +30,17 @@
     },
     "temporal-reasoning": {
       "avg_baseline_accuracy": 0.5,
-      "avg_compressed_accuracy": 0.0,
-      "avg_memory_retention": 0.0
+      "avg_compressed_accuracy": 0.25,
+      "avg_memory_retention": 0.5
     }
   },
   "per_dialogue": {
     "longmemeval_s_star_d0": {
       "baseline_accuracy": 0.4,
       "compressed": {
-        "accuracy": 0.2,
-        "memory_retention": 0.5,
-        "token_reduction": 0.06339814444455283
+        "accuracy": 0.5,
+        "memory_retention": 1.25,
+        "token_reduction": 0.06782240519789662
       }
     }
   }
