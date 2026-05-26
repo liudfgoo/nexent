@@ -1,0 +1,112 @@
+{
+  "total_dialogues": 1,
+  "questions_per_dialogue": 60,
+  "summary_schema": "multi_topic",
+  "judge": "LLM_*",
+  "avg_baseline_accuracy": 0.23333333333333334,
+  "avg_compressed_accuracy": 0.4666666666666667,
+  "avg_memory_retention": 2.0,
+  "avg_token_reduction": 0.07325639249582938,
+  "cost": {
+    "baseline": {
+      "main_input_tokens": 10980383,
+      "main_output_tokens": 92211,
+      "compression_input_tokens": 0,
+      "compression_output_tokens": 0,
+      "total_input_tokens": 10980383,
+      "total_output_tokens": 92211,
+      "total_tokens": 11072594
+    },
+    "compressed": {
+      "main_input_tokens": 11220749,
+      "main_output_tokens": 284145,
+      "compression_input_tokens": 181506,
+      "compression_output_tokens": 6798,
+      "total_input_tokens": 11402255,
+      "total_output_tokens": 290943,
+      "total_tokens": 11693198,
+      "ingest_main_input_tokens": 961746,
+      "ingest_main_output_tokens": 140,
+      "probe_main_input_tokens": 10259003,
+      "probe_main_output_tokens": 284005,
+      "compression_calls": 1
+    },
+    "ratio": {
+      "input": 1.0384205177542531,
+      "output": 3.155187558968019,
+      "total": 1.0560486549041714
+    }
+  },
+  "per_category": {
+    "knowledge-update": {
+      "avg_baseline_accuracy": 0.0,
+      "avg_compressed_accuracy": 0.8888888888888888,
+      "avg_memory_retention": null
+    },
+    "multi-session": {
+      "avg_baseline_accuracy": 0.26666666666666666,
+      "avg_compressed_accuracy": 0.4666666666666667,
+      "avg_memory_retention": 1.75
+    },
+    "single-session-assistant": {
+      "avg_baseline_accuracy": 0.5,
+      "avg_compressed_accuracy": 0.3333333333333333,
+      "avg_memory_retention": 0.6666666666666666
+    },
+    "single-session-preference": {
+      "avg_baseline_accuracy": 0.0,
+      "avg_compressed_accuracy": 0.3333333333333333,
+      "avg_memory_retention": null
+    },
+    "single-session-user": {
+      "avg_baseline_accuracy": 0.1111111111111111,
+      "avg_compressed_accuracy": 0.5555555555555556,
+      "avg_memory_retention": 5.000000000000001
+    },
+    "temporal-reasoning": {
+      "avg_baseline_accuracy": 0.4,
+      "avg_compressed_accuracy": 0.26666666666666666,
+      "avg_memory_retention": 0.6666666666666666
+    }
+  },
+  "per_dialogue": {
+    "longmemeval_s_star_d0": {
+      "baseline_accuracy": 0.23333333333333334,
+      "compressed": {
+        "accuracy": 0.4666666666666667,
+        "memory_retention": 2.0,
+        "token_reduction": 0.07325639249582938
+      },
+      "cost": {
+        "baseline": {
+          "main_input_tokens": 10980383,
+          "main_output_tokens": 92211,
+          "compression_input_tokens": 0,
+          "compression_output_tokens": 0,
+          "total_input_tokens": 10980383,
+          "total_output_tokens": 92211,
+          "total_tokens": 11072594
+        },
+        "compressed": {
+          "main_input_tokens": 11220749,
+          "main_output_tokens": 284145,
+          "compression_input_tokens": 181506,
+          "compression_output_tokens": 6798,
+          "ingest_main_input_tokens": 961746,
+          "ingest_main_output_tokens": 140,
+          "probe_main_input_tokens": 10259003,
+          "probe_main_output_tokens": 284005,
+          "compression_calls": 1,
+          "total_input_tokens": 11402255,
+          "total_output_tokens": 290943,
+          "total_tokens": 11693198
+        },
+        "ratio": {
+          "input": 1.0384205177542531,
+          "output": 3.155187558968019,
+          "total": 1.0560486549041714
+        }
+      }
+    }
+  }
+}

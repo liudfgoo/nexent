@@ -283,6 +283,7 @@ async def run_probes(items, history: list[AgentHistory], args) -> tuple[list[dic
                 language="en",
                 agent_name="longmemeval_answerer",
                 agent_description="LongMemEval question-answering agent",
+                max_tokens=args.probe_max_tokens,
             )
             result = await run_agent_with_tracking(run_info, debug=args.debug)
             verdict = judge_answer(
@@ -353,6 +354,29 @@ def _aggregate_costs(costs: list[dict | None]) -> dict:
         "baseline": baseline_agg,
         "compressed": compressed_agg if have_compressed else None,
         "ratio": ratio,
+    }
+
+
+def _build_run_config(args) -> dict:
+    """Snapshot the run's compression/ingest/probe/baseline params.
+
+    Stored verbatim in summary.json so each output stands alone for
+    later analysis without grepping shell history for the command line.
+    """
+    return {
+        "token_threshold": args.token_threshold,
+        "keep_recent_pairs": args.keep_recent_pairs,
+        "keep_recent_steps": args.keep_recent_steps,
+        "max_observation_length": args.max_observation_length,
+        "summary_schema": args.summary_schema,
+        "sessions_per_batch": args.sessions_per_batch,
+        "max_ingest_sessions": args.max_ingest_sessions,
+        "ingest_max_steps": args.ingest_max_steps,
+        "probe_max_steps": args.probe_max_steps,
+        "probe_concurrency": args.probe_concurrency,
+        "probe_max_tokens": args.probe_max_tokens,
+        "baseline_context_chars": args.baseline_context_chars,
+        "limit": args.limit,
     }
 
 
@@ -538,6 +562,7 @@ async def run_dialogue(dialogue: LongMemEvalDialogue, args) -> dict:
         "num_sessions": len(dialogue.sessions),
         "num_questions": len(items),
         "summary_schema": compressed_data.get("schema", "none") if compressed_data else "none",
+        "config": _build_run_config(args),
         "baseline": {"accuracy": baseline_acc, "n": len(baseline_results)},
         "compressed": (
             None if compressed_data is None else {
@@ -693,6 +718,7 @@ async def main(args):
         "total_dialogues": len(reports),
         "questions_per_dialogue": args.limit if args.limit else 60,
         "summary_schema": args.summary_schema,
+        "config": _build_run_config(args),
         "judge": "JUDGE_*" if judge_configured() else "LLM_*",
         "avg_baseline_accuracy": overall_baseline,
         "avg_compressed_accuracy": overall_compressed,
@@ -783,6 +809,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Bounded asyncio concurrency for probe LLM calls "
                         "(default 5; set 1 for serial). Only affects probes — "
                         "ingest stays serial since compressions are ordered.")
+    p.add_argument("--probe_max_tokens", type=int, default=4096,
+                   help="Per-call completion output cap for probe LLM calls "
+                        "(default 4096 — matches SDK production default). "
+                        "Lower to 1024-2048 for tighter loop containment.")
     # Baseline
     p.add_argument("--baseline_context_chars", type=int, default=480000,
                    help="Characters of the dialogue fed to the baseline arm")

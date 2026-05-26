@@ -329,6 +329,7 @@ async def run_probes(items, history: list[AgentHistory], args) -> tuple[list[dic
                 language="en",
                 agent_name="eventqa_answerer",
                 agent_description="EventQA multiple-choice answering agent",
+                max_tokens=args.probe_max_tokens,
             )
             result = await run_agent_with_tracking(run_info, debug=args.debug)
             mcq = score_mcq(result.final_answer, it.options, it.gold)
@@ -454,6 +455,7 @@ async def run_book(book: EventQABook, args) -> dict:
         "book_title": book.book_title,
         "novel_chars": len(book.context),
         "num_questions": len(items),
+        "config": _build_run_config(args),
         "baseline": {"accuracy": baseline_acc, "n": len(baseline_results)},
         "compressed": compressed_report,
         "cost": cost,
@@ -476,6 +478,30 @@ async def run_book(book: EventQABook, args) -> dict:
                   f"+ compression={c['compression_input_tokens'] + c['compression_output_tokens']:,})  "
                   f"ratio={_fmt(r)}")
     return report
+
+
+def _build_run_config(args) -> dict:
+    """Snapshot the run's compression/ingest/probe/baseline params.
+
+    Stored verbatim in summary.json so each output stands alone for
+    later analysis without grepping shell history for the command line.
+    """
+    return {
+        "token_threshold": args.token_threshold,
+        "keep_recent_pairs": args.keep_recent_pairs,
+        "keep_recent_steps": args.keep_recent_steps,
+        "max_observation_length": args.max_observation_length,
+        "summary_schemas": resolve_schemas(args.summary_schema),
+        "chunk_chars": args.chunk_chars,
+        "max_ingest_chars": args.max_ingest_chars,
+        "ingest_max_steps": args.ingest_max_steps,
+        "probe_max_steps": args.probe_max_steps,
+        "probe_concurrency": args.probe_concurrency,
+        "probe_max_tokens": args.probe_max_tokens,
+        "baseline_context_chars": args.baseline_context_chars,
+        "limit": args.limit,
+        "question_start": args.question_start,
+    }
 
 
 def _build_cost(baseline_probe_tokens: dict, compressed: dict[str, dict]) -> dict:
@@ -677,6 +703,7 @@ async def main(args):
         "total_books": len(reports),
         "questions_per_book": args.limit or 100,
         "summary_schemas": schemas,
+        "config": _build_run_config(args),
         "avg_baseline_accuracy": _avg([r["baseline"]["accuracy"] for r in reports]),
         "per_schema": per_schema,
         "cost": cost_agg,
@@ -767,6 +794,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         help="Bounded asyncio concurrency for probe LLM calls "
                              "(default 5; set 1 for serial). Only affects probes — "
                              "ingest stays serial since compressions are ordered.")
+    parser.add_argument("--probe_max_tokens", type=int, default=4096,
+                        help="Per-call completion output cap for probe LLM calls "
+                             "(default 4096 — matches SDK production default). "
+                             "Lower to 1024-2048 for tighter loop containment.")
     parser.add_argument("--skip_baseline", action="store_true",
                         help="Skip the baseline arm (compressed-only iteration)")
     parser.add_argument("--skip_compressed", action="store_true",
