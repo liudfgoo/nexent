@@ -60,21 +60,21 @@ THINKING_OFF_EXTRA_BODY = {
 }
 
 APP_NAME = os.getenv("APP_NAME", "Nexent")
-APP_DESCRIPTION = os.getenv("APP_DESCRIPTION", "Nexent 是一个开源智能体SDK和平台")
+APP_DESCRIPTION = os.getenv("APP_DESCRIPTION", "Nexent is an open-source agent SDK and platform")
 
 # ============ Default Prompt Templates ============
-DEFAULT_DUTY_PROMPT = """你是一个智能助手，专注于帮助用户解决问题。你需要：
-1. 理解用户的需求并提供准确的回答
-2. 保持友好和专业的态度
-3. 记住对话中的关键信息"""
+DEFAULT_DUTY_PROMPT = """You are an intelligent assistant focused on helping users solve problems. You need to:
+1. Understand the user's needs and provide accurate answers
+2. Maintain a friendly and professional attitude
+3. Remember key information from the conversation"""
 
-DEFAULT_CONSTRAINT_PROMPT = """1. 不得生成有害内容
-2. 遵守法律法规
-3. 不确定时诚实告知用户"""
+DEFAULT_CONSTRAINT_PROMPT = """1. Do not generate harmful content
+2. Comply with laws and regulations
+3. Be honest with users when uncertain"""
 
 DEFAULT_FEW_SHOTS_PROMPT = ""
 
-DEFAULT_FALLBACK_PROMPT = """你是一个有用的 AI 助手，可以帮助用户解决各种问题。请记住对话中的重要信息。"""
+DEFAULT_FALLBACK_PROMPT = """You are a helpful AI assistant that can help users solve various problems. Please remember important information from the conversation."""
 
 # ============ Message Type Constants ============
 TRACKED_MESSAGE_TYPES = {
@@ -185,7 +185,7 @@ def build_agent_run_info(
     max_steps: int = 10,
     temperature: float = 0.1,
     agent_name: str = "test_agent",
-    agent_description: str = "测试 Agent",
+    agent_description: str = "Test Agent",
     language: str = "zh",
     is_manager: bool = False,
     context_manager_config: Optional[ContextManagerConfig] = None,
@@ -472,7 +472,7 @@ async def run_agent_with_tracking(
 
     # Fallback when no final answer
     if not result.final_answer:
-        result.final_answer = result.full_response if result.full_response else "（未获得回应）"
+        result.final_answer = result.full_response if result.full_response else "(No response received)"
 
     return result
 
