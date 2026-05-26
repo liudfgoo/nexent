@@ -78,8 +78,9 @@ class SummaryTaskStep(TaskStep):
 def format_summary_output(raw_output: str) -> Optional[str]:
     """Clean and validate LLM summary output.
 
-    Strips markdown code fences, attempts JSON parse for normalization,
-    falls back to plain text if not valid JSON.
+    Strips markdown code fences, attempts JSON parse for normalization.
+    Returns None if not valid JSON, triggering L3 fallback (hard truncation)
+    instead of caching invalid plain-text output.
     """
     cleaned = raw_output.strip()
     if cleaned.startswith("```"):
@@ -91,8 +92,8 @@ def format_summary_output(raw_output: str) -> Optional[str]:
         parsed = json.loads(cleaned)
         return json.dumps(parsed, ensure_ascii=False, indent=2)
     except json.JSONDecodeError:
-        logger.warning("Summary output is not valid JSON; using as plain text")
-        return cleaned
+        logger.warning("Summary output is not valid JSON; returning None to trigger L3 fallback")
+        return None
 
 
 def _is_context_length_error(err: Exception) -> bool:
