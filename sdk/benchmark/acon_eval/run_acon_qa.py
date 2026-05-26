@@ -94,6 +94,14 @@ For each sub-question, in order:
 6. If the first 2 searches fail, the 3rd query must be broader and centered on the main entity/topic.
 7. If 3 searches are exhausted, commit to the best candidate from observed results and move on.
 
+# Anti-Loop & Exhaustion Rules (CRITICAL — overriding priority)
+- Track the exact count of wikipedia_search calls for the current sub-question.
+- When count reaches 3, STOP searching immediately. Output ANSWER_Q<number>: <your best inference from observed results> and move to the next question. No exceptions, no additional searches.
+- If the last 2 searches returned completely irrelevant results (no mention of the target entity), the query angle is wrong. Do NOT search a third time with minor wording tweaks of the same query. Instead, search the main entity broadly (e.g. "Formula One history" instead of "chain F1"), or if already at 3, infer the best answer from any indirect clues in the observations and output ANSWER_Q<number>.
+- Self-check: if you catch yourself writing "I'm not finding it", "Perhaps", "Let me search for" or similar frustration phrases, you have already done enough searching. Output ANSWER_Q<number> with your best inference immediately.
+- After 3 searches, you already have your answer. Do NOT write "However", "But", "I'm not sure", "I'm not entirely sure", "Let me try one more", "Let me check directly", or any similar hesitation phrase. These words mean you have a candidate answer but are delaying. Output that candidate as ANSWER_Q<number> right now and move on. Uncertainty is expected and acceptable — your best guess IS the answer.
+- If the conversation contains a user message starting with "Summary of earlier steps in this task:", that message is an authoritative checkpoint of your progress. Before each search, check its JSON fields: "status", "search_counts", "pending_q", "next_action". If pending_q is empty and next_action says to call final_answer, call final_answer immediately — do not search again. If a question is marked "exhausted" in the summary, do not search it further.
+
 # Query Rules
 - Prefer entity-focused queries, e.g. "Asha Bhosle Guinness", not "most prolific singer ever".
 - Each query must be meaningfully different.
@@ -118,10 +126,9 @@ ANSWER_Q2: September 1980
 Rules:
 - The marker is plain text, not a code block.
 - If an Observation clearly answers Q<number>, output `ANSWER_Q<number>: <canonical answer>`.
-- If Q<number> reaches 3 wikipedia_search calls, do not search that question again.
 - After 3 searches, if there is any usable candidate in the Observations, output `ANSWER_Q<number>: <best canonical candidate>`.
 - Never move to the next question without an ANSWER_Q marker for the current question.
-- Use the registered ANSWER_Q  marker to construct the final answer.
+- Use the registered ANSWER_Q markers to construct the final answer.
 
 # Final Answer
 Before calling `final_answer`, count your answers.
@@ -302,35 +309,42 @@ async def main(
         custom_incremental_summary_system_prompt = (
             "Update the compact QA checkpoint based on the latest agent action. "
             "Output only strict JSON matching the schema. No markdown.\n\n"
-            "Treat ANSWER_Q<number>: ... marker as authoritative."
-            "Never replace an ANSWER_Q value with null or Unknown."
+            "Treat ANSWER_Q<number>: ... marker as authoritative; never replace with null or Unknown."
             "INCREMENTAL UPDATE RULES:\n"
-            "- Preserve all existing answered values unless new evidence explicitly corrects them.\n"
-            "- Never change an answered value to null or 'Unknown'.\n"
+            "- Preserve all answered values; never downgrade them to null or 'Unknown'.\n"
             "- If the latest action executed wikipedia_search, increment only that question's search_counts entry.\n"
             "- If the latest observation clearly answers the current question, write the canonical answer into answers and set status to 'answered'.\n"
-            "- If search_counts for a question reaches 3 and no usable answer candidate exists, infer the most probable answer, set and status to 'exhausted'.\n"
+            "- ENFORCEMENT: If any search_counts reaches >=3, its status MUST be 'exhausted' (NEVER 'searching'). "
+            "Set its answer to the best observed candidate, or 'Unknown' if nothing was useful. "
+            "An exhausted question must be REMOVED from pending_q.\n"
+            "- current_q must advance past any exhausted question to the next unstarted/searching question.\n"
+            "- If ALL questions are answered or exhausted, set next_action to 'Call final_answer with the collected answers'.\n"
+            "- NEVER set next_action to search a question whose search_counts is already >=3.\n"
             "- Otherwise, leave answer as null and status as 'searching'.\n"
             "- pending_q must contain exactly the question numbers with status 'unstarted' or 'searching'.\n"
-            "- current_q should be the first pending question.\n"
             "- Overwrite the old state completely. Do not append logs, snippets, or history."
         )
 
         custom_summary_system_prompt = (
             "You are creating a compact execution checkpoint for a sequential multi-question QA agent. "
             "Output only strict JSON matching the schema. No markdown, greetings, or backticks.\n\n"
-            "Treat ANSWER_Q<number>: ... marker as authoritative."
-            "Never replace an ANSWER_Q value with null or Unknown."
+            "Treat ANSWER_Q<number>: ... marker as authoritative; never replace an ANSWER_Q value with null or Unknown.\n"
             "STATE RULES:\n"
-            "- Preserve exact canonical answer strings when they are explicitly available.\n"
+            "- Preserve exact canonical answer strings when explicitly available.\n"
             "- answers, status, and search_counts must all have length n_questions.\n"
-            "- status must be consistent with answers:\n"
-            "  * unstarted/searching => answer is null\n"
+            "- status must be consistent with answers and search_counts:\n"
+            "  * unstarted => answer is null, search_counts is 0\n"
+            "  * searching => answer is null, search_counts is 1 or 2\n"
+            "  * answered => answer is non-null canonical string, search_counts is 1-3\n"
+            "  * exhausted => search_counts is >=3, answer is best inference or 'Unknown'\n"
+            "- A question with search_counts >=3 must have status 'exhausted', never 'searching'.\n"
             "- pending_q must contain exactly the question numbers with status 'unstarted' or 'searching'.\n"
-            "- current_q should be the first question whose status is 'unstarted' or 'searching', unless the recent trajectory clearly shows another active question.\n\n"
+            "- current_q should be the first question in pending_q.\n"
+            "- If all questions are answered or exhausted, set next_action to 'Call final_answer'.\n\n"
 
             "COMPACTION RULES:\n"
             "- Strip raw search logs, snippets, long reasons, file status, and failed query history.\n"
+            "- Count every wikipedia_search call visible in the trajectory for each question.\n"
             "- Keep the checkpoint short and stable. Do not append history."
         )
         cm_config = ContextManagerConfig(
@@ -448,13 +462,15 @@ async def main(
     avg_output_tokens = (total_output_tokens / n) if n else 0.0
 
     # Compression cost aggregate (context_manager mode only)
-    total_compression_cost_tokens = 0
+    total_compression_input_tokens = 0
+    total_compression_output_tokens = 0
     for row in all_rows:
         cm_stats = row.get("cm_stats")
         if cm_stats:
-            total_compression_cost_tokens += cm_stats.get("total_input_tokens", 0)
-            total_compression_cost_tokens += cm_stats.get("total_output_tokens", 0)
-    avg_compression_cost_tokens = (total_compression_cost_tokens / n) if n else 0.0
+            total_compression_input_tokens += cm_stats.get("total_input_tokens", 0)
+            total_compression_output_tokens += cm_stats.get("total_output_tokens", 0)
+    avg_compression_input_tokens = (total_compression_input_tokens / n) if n else 0.0
+    avg_compression_output_tokens = (total_compression_output_tokens / n) if n else 0.0
 
     # Summary
     summary = {
@@ -468,11 +484,15 @@ async def main(
         "max_steps": max_steps,
         "token_threshold": token_threshold if mode == "context_manager" else None,
         "keep_recent_pairs": keep_recent_pairs if mode == "context_manager" else None,
+        "keep_recent_steps": keep_recent_steps if mode == "context_manager" else None,
         "avg_input_tokens": avg_input_tokens,
         "avg_output_tokens": avg_output_tokens,
         "total_input_tokens": total_input_tokens,
         "total_output_tokens": total_output_tokens,
-        "avg_compression_cost_tokens": avg_compression_cost_tokens if mode == "context_manager" else None,
+        "total_compression_input_tokens": total_compression_input_tokens if mode == "context_manager" else None,
+        "total_compression_output_tokens": total_compression_output_tokens if mode == "context_manager" else None,
+        "avg_compression_input_tokens": avg_compression_input_tokens if mode == "context_manager" else None,
+        "avg_compression_output_tokens": avg_compression_output_tokens if mode == "context_manager" else None,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -494,7 +514,8 @@ async def main(
     print(f"  Avg Input Tokens:  {avg_input_tokens:,.0f}")
     print(f"  Avg Output Tokens: {avg_output_tokens:,.0f}")
     if mode == "context_manager":
-        print(f"  Avg Compression Cost: {avg_compression_cost_tokens:,.0f} tokens")
+        print(f"  Avg Compression Input Tokens:  {avg_compression_input_tokens:,.0f}")
+        print(f"  Avg Compression Output Tokens: {avg_compression_output_tokens:,.0f}")
     print(f"  Output:     {out_dir}")
     print(f"{'='*60}\n")
 
@@ -518,7 +539,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=30, help="Max agent steps per question")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of examples")
     parser.add_argument("--retriever_port", type=str, default="8005", help="ACON retriever server port")
-    parser.add_argument("--token_threshold", type=int, default=4800, help="ContextManager token threshold (for context_manager mode)")
+    parser.add_argument("--token_threshold", type=int, default=7200, help="ContextManager token threshold (for context_manager mode)")
     parser.add_argument("--keep_recent_pairs", type=int, default=1, help="ContextManager keep_recent_pairs (for context_manager mode)")
     parser.add_argument("--keep_recent_steps", type=int, default=4, help="ContextManager keep_recent_steps (for context_manager mode)")
     parser.add_argument("--max_observation_length", type=int, default=20000, help="Max observation length in chars (for context_manager mode)")
