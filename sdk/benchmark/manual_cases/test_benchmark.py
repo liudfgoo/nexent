@@ -38,74 +38,126 @@ Now start!"""
 
 # --- Custom summary schema and prompts for knowledge-discussion benchmarks ---
 # These override the default 10-field Hermes schema from summary_config.py
-# with a leaner 7-field schema (~800 word budget vs ~1600) and incremental
-# prompts that enforce MERGE+CONDENSE (not append) to prevent linear output growth.
-
-BENCHMARK_SUMMARY_SCHEMA = {
-    "active_task": "User's most recent unfulfilled request, or 'None'. (<=50 words)",
-    "goal": "Overall objective of the conversation. (<=50 words)",
-    "completed_work": "Numbered list of topics discussed and conclusions reached. Be specific with numbers, names, and domain terms. (<=200 words)",
-    "resolved_questions": "Questions already answered with their key answers. Preserve exact numbers and terms. (<=150 words)",
-    "active_state": "Current state of discussion, what has been established. (<=50 words)",
-    "pending_items": "Unresolved questions or pending requests. If none, write 'None'. (<=50 words)",
-    "critical_context": "Specific values, data points, domain terms, and exact numbers that would be lost without explicit preservation. This is the most important field for retaining factual detail. (<=250 words)",
-}
+# with a deduplicated 6-field schema (~620 word budget) that merges
+# completed_work + resolved_questions into "progress" and restricts
+# key_facts to values NOT already stated in progress, eliminating
+# the 3-field redundancy that caused output bloat in incremental updates.
+#
+# KEY DESIGN PRINCIPLE for incremental compression: the output must be
+# approximately the SAME size as the initial summary (~620 words). The
+# incremental prompt treats old+new as a unified corpus and REWRITES the
+# entire summary from scratch, rather than appending to the old one.
+# This prevents output-token linear growth that would itself exceed
+# token_threshold and defeat the purpose of compression.
 
 BENCHMARK_SUMMARY_SYSTEM_PROMPT = (
-    "You are a summarization agent creating a context checkpoint. "
-    "Treat the conversation turns below as source material for a compact record of prior work. "
-    "Produce only the structured JSON summary; do not add a greeting, preamble, or prefix. "
-    "Write the summary in the same language the user was using in the conversation — "
-    "do not translate or switch to English. "
-    "NEVER include API keys, tokens, passwords, secrets, credentials, or connection strings "
-    "in the summary — replace any that appear with [REDACTED]. Note that the user had "
-    "credentials present, but do not preserve their values. "
-    "Information priority: Critical (task, goal, constraints) > "
-    "Operational (completed actions, active state) > Reference (files, decisions). "
-    "Be CONCRETE — include specific values, data points, and domain terms. "
-    "Avoid vague descriptions like 'discussed some numbers' — preserve exact numbers "
-    "(e.g., '14 SOTA improvements', 'rank 48', '56 years') verbatim — these are critical for later recall.\n\n"
-    "The total output must not exceed 800 words. Condense rather than enumerate. "
-    "Create a structured checkpoint summary for the conversation. The summary should preserve "
-    "enough detail for continuity without re-reading the original turns. "
-    "Output strict JSON format without markdown blocks."
+    "You are a summarization agent creating a compact working-memory checkpoint. "
+    "Treat the conversation turns below as source material, not as a transcript to preserve. "
+    "Your job is to produce a fixed-size JSON summary that preserves only the information "
+    "needed to continue the conversation correctly later.\n\n"
+
+    "Output rules:\n"
+    "1. Produce only strict JSON. Do not add greeting, preamble, markdown, or explanation.\n"
+    "2. Write in the same language as the user's most recent message. Do not translate unless needed.\n"
+    "3. Never include API keys, tokens, passwords, secrets, credentials, or connection strings. "
+    "Replace any such values with [REDACTED].\n\n"
+
+    "Compression goal:\n"
+    "The summary is working memory, not a historical log. "
+    "Do not list every question, every answer, or every conversation turn. "
+    "Group information by theme and keep only facts that are likely to matter for future continuation.\n\n"
+
+    "Field constraints:\n"
+    "1. 'active_task' must describe only the current unfulfilled user request; if none, write 'None'.\n"
+    "2. 'goal' must describe the current overall objective in <=25 words.\n"
+    "3. 'state' must contain at most 6 numbered items. Never create item 7 or higher. "
+    "Each item must be <=45 words. Merge related topics into one item. "
+    "Do not organize by conversation order; organize by semantic importance.\n"
+    "4. 'decisions' must contain at most 5 short confirmed conclusions or choices. "
+    "Do not repeat facts already fully stated in 'state'.\n"
+    "5. 'open_items' must contain only unresolved questions or pending user requests. "
+    "If none, write 'None'.\n"
+    "6. 'verbatim_facts' may contain at most 12 raw values, formulas, thresholds, exact model names, "
+    "or identifiers that must be copied exactly later. "
+    "Before output, remove any item whose exact value already appears in 'state' or 'decisions'. "
+    "If no extra raw facts remain, write 'None'.\n\n"
+
+    "Information priority:\n"
+    "Critical current task and constraints > final conclusions > decisions > exact values needed later > "
+    "background context. Drop vague descriptions, repeated facts, superseded intermediate reasoning, "
+    "and completed Q&A that no longer affects future work.\n\n"
+
+    "Budget:\n"
+    "The total output must not exceed 620 words. Prefer shorter output. "
+    "If the content is too large, compress in this order: "
+    "(1) merge related state items; "
+    "(2) remove completed historical details; "
+    "(3) keep only the most diagnostic numbers; "
+    "(4) move only non-duplicated raw values to 'verbatim_facts'; "
+    "(5) write 'None' for fields with no current utility.\n\n"
+
+    "Return strict JSON only."
 )
 
+
 BENCHMARK_INCREMENTAL_SUMMARY_SYSTEM_PROMPT = (
-    "You are a summarization agent creating a context checkpoint. "
-    "Treat the conversation turns below as source material for a compact record of prior work. "
-    "Produce only the structured JSON summary; do not add a greeting, preamble, or prefix. "
-    "Write the summary in the same language the user was using in the conversation — "
-    "do not translate or switch to English. "
-    "NEVER include API keys, tokens, passwords, secrets, credentials, or connection strings "
-    "in the summary — replace any that appear with [REDACTED]. Note that the user had "
-    "credentials present, but do not preserve their values. "
-    "Information priority: Critical (task, goal, constraints) > "
-    "Operational (completed actions, active state) > Reference (files, decisions). "
-    "Be CONCRETE — include specific values, data points, and domain terms. "
-    "Avoid vague descriptions like 'discussed some numbers' — preserve exact numbers "
-    "and domain terms verbatim.\n\n"
-    "You are updating an existing context compaction summary. A previous compaction produced "
-    "the summary shown as 'Previous Summary'. New conversation turns have occurred since then "
-    "and are shown as 'New Content'. Update the summary by following these rules:\n"
-    "1. MERGE and CONDENSE: Integrate old and new information — do NOT simply append new content "
-    "to the old summary. When new information supersedes or refines old information, replace "
-    "the old with the new rather than keeping both. Old details that are redundant with new "
-    "information should be merged, not duplicated.\n"
-    "2. ADD new conclusions and answered questions to the appropriate fields.\n"
-    "3. UPDATE 'active_state' to reflect the current state of discussion.\n"
-    "4. UPDATE 'active_task' to reflect the user's most recent unfulfilled request.\n"
-    "5. UPDATE 'pending_items': move resolved items out, add new pending items.\n"
-    "6. UPDATE 'critical_context' with any new specific values, data points, or domain terms "
-    "that must be preserved verbatim.\n"
-    "7. The updated summary must NOT exceed 800 words total. If merging new content would "
-    "exceed this limit, condense older or lower-priority information first. The summary size "
-    "must stay approximately constant across incremental updates — do NOT let it grow linearly.\n"
-    "8. Compress by substitution: when new information supersedes old, replace the old entry "
-    "entirely rather than keeping both versions.\n"
-    "9. Preserve exact numbers and domain terms verbatim — these are critical for later recall.\n"
-    "10. Output the complete updated summary as strict JSON without markdown blocks."
+    "You are a summarization agent rewriting a compact working-memory checkpoint. "
+    "You receive a Previous Summary and New Conversations. Produce one fresh JSON summary "
+    "that preserves only the information needed to continue the conversation correctly. "
+    "Do not preserve discussion history for its own sake. The previous summary is source material, "
+    "not text to copy.\n\n"
+
+    "Hard constraints:\n"
+    "1. The output must be no longer than the previous summary and must not exceed 620 words.\n"
+    "2. The 'state' field must contain at most 6 numbered items. Never create item 7 or higher.\n"
+    "3. When new information is added, older lower-utility information MUST be merged, generalized, or deleted.\n"
+    "4. Do not append to the previous summary. Rewrite by theme, not by conversation order.\n"
+    "5. Completed Q&A should become conclusions, not separate historical entries.\n"
+    "6. Preserve exact numbers only when they are needed for future correctness. If multiple numbers support the same conclusion, keep only the most diagnostic ones.\n"
+    "7. 'verbatim_facts' may contain at most 12 raw values/formulas/names. Remove any item already present in 'state' or 'decisions'. If none remain, write 'None'.\n"
+    "8. Update active_task, state, and open_items to reflect the current state.\n"
+    "9. Write in the same language as the user's most recent message.\n"
+    "10. Never include API keys, tokens, passwords, credentials, or connection strings; replace them with [REDACTED].\n\n"
+
+    "Output strict JSON only. No markdown."
 )
+
+BENCHMARK_SUMMARY_SCHEMA = {
+    "active_task": (
+        "用户当前尚未完成的最新请求；如果没有，写 'None'。"
+        "必须是当前任务，不是历史任务。<=25 words"
+    ),
+
+    "goal": (
+        "对话的总体目标或当前工作方向。"
+        "只保留后续继续对话所需的目标。<=25 words"
+    ),
+
+    "state": (
+        "当前压缩后的工作记忆，不是历史日志。"
+        "最多 6 条编号条目；每条 <=45 words。"
+        "按主题合并信息，不按对话顺序罗列。"
+        "包括已经确定的结论、关键设计、关键结果和必要上下文。"
+    ),
+
+    "decisions": (
+        "已经确认、后续可能需要引用的结论或选择。"
+        "最多 5 条；每条 <=25 words。"
+        "不得重复 state 中已经完整表达的信息。"
+    ),
+
+    "open_items": (
+        "尚未解决的问题、待办事项或用户明确要求继续处理的内容。"
+        "如果没有，写 'None'。<=30 words"
+    ),
+
+    "verbatim_facts": (
+        "必须逐字保留的数字、公式、模型名、阈值或专有名词。"
+        "最多 12 项，用分号分隔。"
+        "不得包含已经出现在 state 或 decisions 中的事实。"
+        "如果没有额外需要保留的事实，写 'None'。"
+    ),
+}
 
 
 def history_to_text(history: list[AgentHistory]) -> str:
