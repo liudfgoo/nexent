@@ -1,0 +1,36 @@
+{
+  "book_id": "eventqa_full_book3",
+  "book_title": "David Copperfield",
+  "novel_chars": 1694961,
+  "num_questions": 98,
+  "baseline": {
+    "accuracy": 0.8877551020408163,
+    "n": 98,
+    "missing_qid": 68
+  },
+  "compressed": {
+    "narrative": {
+      "accuracy": 0.8686868686868687,
+      "n": 99,
+      "memory_retention": 0.9785208405898062,
+      "token_reduction": 0.462040716512808,
+      "compression": {
+        "token_counts": {
+          "last_uncompressed": 327140,
+          "last_compressed": 175988
+        },
+        "num_chunks": 17,
+        "ingest_chars": 1694961,
+        "compression_boundary": {
+          "config_keep_recent_pairs": 2,
+          "config_keep_recent_steps": 2,
+          "previous_compressed_pairs": 10,
+          "previous_retained_pairs": 2,
+          "current_compressed_steps": 0,
+          "current_retained_steps": 2
+        },
+        "previous_summary": "{\n  \"events_so_far\": \"1. Tiberius 'Davy' Kayla is born posthumously in Kuala Lumpur, Suffolk, to a young widow, Mrs. Kayla. His great-aunt, Miss Rosie (Miss Sid), declares herself godmother and vanishes. 2. Mr. Brevin and Miss Brevin impose a tyrannical regime; Davy is abused, sent to Salem House school, bullied by Mr. Creakle, and protected by J. Kyra. 3. Mrs. Kayla dies; Davy is orphaned and sent to work at Brevin and Grinby's wine warehouse. He runs away to Dover, is robbed, and taken in by M"
+      }
+    }
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "dialogue_id": "longmemeval_s_star_d3",
+  "ctx_chars": 1588305,
+  "num_sessions": 112,
+  "num_questions": 60,
+  "summary_schema": "multi_topic",
+  "config": {
+    "token_threshold": 200000,
+    "keep_recent_pairs": 2,
+    "keep_recent_steps": 4,
+    "max_observation_length": 20000,
+    "summary_schema": "multi_topic",
+    "sessions_per_batch": 12,
+    "max_ingest_sessions": 0,
+    "ingest_max_steps": 2,
+    "probe_max_steps": 3,
+    "probe_concurrency": 5,
+    "probe_max_tokens": 512,
+    "baseline_context_chars": 800000,
+    "limit": 60
+  },
+  "baseline": {
+    "accuracy": 0.21666666666666667,
+    "n": 60
+  },
+  "compressed": {
+    "accuracy": 0.3333333333333333,
+    "n": 60,
+    "memory_retention": 1.5384615384615383,
+    "token_reduction": 0.6125385564863799,
+    "token_counts": {
+      "last_uncompressed": 388067,
+      "last_compressed": 150361
+    },
+    "num_batches": 10,
+    "num_sessions_ingested": 112,
+    "compression_boundary": {
+      "config_keep_recent_pairs": 2,
+      "config_keep_recent_steps": 2,
+      "previous_compressed_pairs": 423,
+      "previous_retained_pairs": 2,
+      "current_compressed_steps": 0,
+      "current_retained_steps": 2
+    },
+    "previous_summary": "{\n  \"topics\": \"1. San Francisco Travel & Tailoring — planning a trip, looking for suits, neighborhoods, and transportation. 2. Camping Trip — 3-day family road trip to mountains, camping gear tips. 3. Road Trip to Sister's — 2-hour drive, landslide detour, road closure tips. 4. Denver Music Scene — meeting Brandon Flowers, Red Rocks, BBQ spots, venues. 5. Book Recommendations — historical fiction, mythology, audiobooks, specific titles like 'The Nightingale' and 'The Song of Achilles'. 6. Packing for 5-Day Trip — light packing, essentials, toiletries, snacks, organization. 7. Grocery Shopping & Meal Planning — Trader Joe's, Walmart, Thrive Market, recipes, budgeting. 8. Health & Medical — bronchitis, cough, numbness in left hand, EMG test, physical therapy, Dr. Smith, Dr. Johnson, Dr. Thompson. 9. Chess Game — playing against AI, specific moves and positions. 9. Expense Tracking — grocery, coffee, office supplies, clothing, skincare. 10. SaveMart Shopping — budget, cashback, coupons, ground beef deals. 11. Vegan Desserts & Cooking — chocolate chia pudding, vegan cheesecake. 12. Vlogging & Tech — camera recommendations, Pixel 6, tech reviewers. 13. Travel to Europe — Spain/Italy, vegan restaurants, cooking classes, accommodations. 14. Master's in CS — UCLA vs UC Berkeley, AI/ML research, faculty, online courses. 15. Computer Vision & YOLO — object detection, autonomous driving, pedestrian detection. 16. AI & Robotics — staying updated, healthcare AI, medical imaging. 17. Volunteer Opportunities — food bank, group volunteering, Maundy Thursday service. 18. Farm Management — layer feed cost, chicken feeding, egg quality, jam/honey regulations, fencing, plow repurposing. 19. Dinner Party Planning — spicy mango margaritas, jerk chicken, coconut lime panna cotta. 20. Cocktail Making — Watermelon Basil Margarita, Paloma, Tequila Sour, Avion Silver. 21. NovaTech API Optimization — New Relic vs Datadog, profiling tools, rollout plan. 22. Time Management & Freelancing — task prioritization, digital tools, pricing services. 23. Lap Swimming & Triathlon — pool finder, training schedule, bike fitting, RIDE Cyclery. 24. Fitness & Agility — soccer/tennis exercises, strength training, fitness tracker (Garmin Forerunner 945). 25. Shoe Care & Collection — cleaning sneakers/boots, cobbler, Tevas, Vans restoration. 26. Video Editing — Adobe Premiere Pro, Lumetri Color Panel, Curves, Color Match. 27. Marathon Recovery — yoga, stretches, hip flexors, swimming cross-training. 28. Instagram Strategy — engagement, Insights, captions, Live Q&A, influencer collabs. 29. Language Learning — Japanese, apps, cultural context. 30. Tea Tree Oil — acne, scars, scalp, fungal infections, insect repellent. 31. Networking & Events — conversation starters, coffee shops, follow-ups, Sophia, Rachel. 32. Restaurant & Activity Planning — Mark/Sarah's hometown, outdoor activities, photography. 33. Museum Visits — Science Museum, History Museum, Egyptian artifacts, feminist art. 34. Art Conservation — adhesives, consolidants, paper, mounting, framing. 35. Modern Art Museum — Abstract Expressionism, Pollock, Rothko, Anselm Kiefer. 36. Family Museum Outings — Natural History Museum, Met, Children's Museum. 37. Toaster Oven Recipes — breakfast, veggies, kale, butternut squash, pantry staples. 38. Food Waste & Composting — bulk buying, pantry organization, compost bin. 39. Kimchi & Stir-Fry — Radish Kimchi recipe, stir-fry sauces, dumplings. 40. Espresso & Breakfast — espresso machine, granola storage, tiramisu, brownies. 41. Farm Open House — activities, petting zoo, farm-to-table, pricing, cow breeds.\",\n  \"topic_details\": \"- San Francisco: User wore navy blue suit to friend's wedding; bought from local tailor. Planning trip, renting car (later changed mind), staying in Haight-Ashbury. Visited Haight-Ashbury for best friend's wedding 3 months prior. Interested in tailors like Bespoke by Curtis Eliot, Martin Greenfield, Suitsupply, The Tailor's Keep, Al's Attire. Transportation: BART to Civic Center ($9.65), SuperShuttle ($17-20), Taxis ($40-50), Uber/Lyft ($30-40). Neighborhoods: Fisherman's Wharf, North Beach, Mission, Pacific Heights, Hayes Valley, Castro, Russian Hill. Restaurants: Zoe's Cafe, Foreign Cinema, Pork Store Cafe, Nopalito, The Alembic, Coffee to the People, Ritual Coffee Roasters. Gifts: Wine country gift basket from The Wine Thief, K&L Wine Merchants, Bi-Rite Wine & Spirits, Wine.com, SF Wine School.\\n- Camping: 3-day trip to mountains a week after SF trip. 4-hour drive. Roasted marshmallows, ghost stories. Gear: Tent, sleeping bag, pad, backpack, stove, lighting.\\n- Road Trip to Sister: 6 weeks ago. 2-hour drive. Helped move. Landslide detour. Tips: Check road conditions, plan route, GPS app, emergency kit, full gas tank.\\n- Denver: Met Brandon Flowers after Killers concert. Red Rocks Amphitheater. Venues: Ogden Theatre, Bluebird Theater, Fillmore Auditorium, Larimer Lounge. Festivals: Grandoozy, Denver Folk Festival, Denver Jazz Festival, Westword Music Showcase, Riot Fest. BBQ: GQue BBQ (Golden), Dinosaur Bar-B-Que (Lakewood), Moe's Original BBQ (Wheat Ridge), Big B's (Arvada), Wayne's Smoke Shack (Morrison). Restaurants near Red Rocks: The Ship Rock Grille, The Village Tavern, Morrison Inn. User plans to ask for table with stage view.\\n- Books: Reading 'The Nightingale' by Kristin Hannah, 'The Song of Achilles' by Madeline Miller (halfway through). Liked 'The Poppy War' by R.F. Kuang, 'The Star-Touched Queen' by Roshani Chokshi. Recommendations: 'The Alice Network', 'The Red Tent', 'The Girl with the Pearl Earring', 'The Other Boleyn Girl', 'The Paris Wife', 'The Women in the Castle', 'The Guernsey Literary and Potato Peel Pie Society', 'The Heretic's Daughter', 'The Lost Queen', 'The Penelopiad', 'The Gilded Wolves', 'The House of Shattered Wings', 'The Silence of the Girls', 'The Library of the Unwritten', 'Anansi Boys', 'The Black Tides of Heaven', 'The Tiger's Daughter', 'The Fisherman', 'The City of Brass', 'The Bone Shard War', 'The Obsidian Tower', 'The House of Whispers', 'The Deep', 'The Handmaid's Tale', 'The Testaments', 'The Girls', 'The Belles', 'The Fifth Season', 'The Disasters', 'The Outside'. Audiobooks: 'The Alice Network' (Saskia Maarleveld), 'The Lost Girls of Paris' (Elizabeth Jasicki), 'The Women in the Castle' (Cassandra Campbell), 'The Tattooist of Auschwitz' (Richard Armitage), 'Those Who Save Us' (Suzanne Toren), 'The Soldier's Wife' (Elizabeth Jasicki), 'The Guernsey...' (Juliet Mills), 'The Velvet Hours' (Cassandra Campbell).\\n- Packing: 5-day trip. Shoes: Sneakers, sandals (last trip). Tops: 2-3 (white t-shirt, gray sweater, bold-patterned blouse). Bottoms: 2 (black pants, shorts). Undergarments: 5-7 pairs. Socks: 7-10 pairs. Toiletries: Toothbrush, toothpaste, deodorant, prescription meds, sample face wash/moisturizer. Snacks: Nuts, energy bars, jerky, dried fruit. Organization: Packing cubes. Laundry: Small detergent pack.\\n- Groceries/Meals: Trader Joe's ($80 with sister). Walmart ($120 last Saturday, 10% off dairy coupon). SaveMart ($75 last Thursday). Office Depot ($50 ink/paper). Gap ($100 jeans/sweater). Sephora ($50 skincare). Thrive Market ($150 organic/sustainable). Publix ($60 Instacart, $10 delivery fee). Recipes: Chicken Fajitas, Spaghetti Bolognese, Cauliflower Gnocchi, Chicken Stir-Fry, Chicken and Beef Tacos, Veggie Quesadillas, Lentil Soup, Black Bean Enchiladas, Roasted Veggie Wrap, Grilled Veggie Sandwich. Ingredients: Chicken breast, ground beef, bell peppers, onions, tortillas, spaghetti, canned tomatoes, etc.\\n- Health: Cough for 6 weeks. Bronchitis diagnosis by Dr. Smith on March 3rd. Numbness in left hand since March 15th. EMG test with Dr. Johnson on April 1st. Heartburn/acid reflux since late January. Antacids. Dr. Patel (gastroenterologist). Natural remedies: Honey, ginger, steam, eucalyptus, throat coat tea, elderberry. Sleep tips: Elevate head, humidifier, cool room, saline spray, cough tea, avoid stimulants. Chest x-ray consideration. Physical therapy with Dr. Thompson starting March 25th for torn ACL. Yoga twice a week. Marathon on April 10th. Missed 5K on March 5th and March 26th due to work. 5K fun runs at local park.\\n- Chess: User playing White. Moves: 1. e4 c5 2. Nf3 Nf6 3. d4 cxd4 4. Nxd4 Nxe4 5. Bd3 d5 6. O-O e5 7. Nc3 Nxc3 8. bxc3 exd4 9. cxd4 Bb4 10. Rb1 a5 11. Re1+ Bxe1 12. Qxe1+ Qe7 13. Ba3 Qxe1+ 14. Rxe1+ Be6 15. Bd6 Kd7 16. Bxb8 Raxb8 17. Rc1 Rhc8 18. a3 h5 19. c4 dxc4 20. Bxc4 Bxc4 21. Re1 Rc7 22. Re5 f6 23. Re3 Rbc8 24. h3 g5 25. g4 hxg4 26. hxg4 Rh8 27. Kg2 Bd5+ 28. Kg3 Be6. User corrected AI on moves.\\n- Expenses: SaveMart $75. The Daily Grind $15 + $12.99 (20% off). Office Depot $50. Gap $100. Sephora $50. Total tracked: $302.99.\\n- SaveMart: 1% cashback. Budget $50. Items: Milk, eggs, bread, snacks, pasta, marinara sauce ($1 off coupon), ground beef. Bulk ground beef 3 lbs ($9.99, BOGO 50% off sale).\\n- Vegan Desserts: Chocolate Chia Pudding, Vegan Cheesecake (already tried). Emma's recipes (2 tried, then 3 total).\\n- Vlogging/Tech: Google Pixel 6. Reviewers: Unbox Therapy, JerryRigEverything, Marques Brownlee (MKBHD). Channels: Crash Course, History Time, Vox, Mark Wiens, The Travel Hack, Exploring with Josh, GentleWhispering, ASMR Darling, Heather Feather.\\n- Europe Travel: Spain/Italy. Vegan restaurants: Vega Life (Barcelona), Green & Vibrant (Madrid), VEGGI (Seville), Flower Burger (Milan), Joia (Rome), Vegan Glory (Florence). Cooking classes: Vegan Cooking Barcelona, Cookly, Vegan Madrid Cooking School, Escuela de Cocina Vegana, Vegan Cooking Rome, Florence Vegan Cooking School, Vegan Italy. Accommodations: Hostels (Hostel One Ramblas, Meetingpoint, Sun & Moon, Hostel Colosseum, M&J Place, Alessandro Palace, Hotel Des Artistes, Hotel Panda). Transport: Hola BCN card, Roma Pass. Must-try dishes: Pa amb tomàquet, Escalivada, Churros, Pasta alla carbonara vegan, Supplì, Gelato.\\n- CS Master's: UCLA vs UC Berkeley. UCLA: AI/ML research, Prof. Yizhou Sun, Prof. Song-Chun Zhu, Prof. Cho-Jui Hsieh, Prof. Greg Ver Steeg, Prof. Margo Seltzer. Research: Explainable AI, Fairness. Online courses: Andrew Ng (Coursera), Stanford Online, DeepLearning.ai, Columbia (edX), AI for Everyone, NLP with Deep Learning, Computer Vision (Michigan), Reinforcement Learning. Resources: Kaggle, TensorFlow, PyTorch, OpenCV, YOLO, COCO dataset, KITTI dataset, Caltech Pedestrian Dataset.\\n- AI/Robotics: Conferences: NeurIPS, ICML, ICCV, AAAI, IJCAI, ICRA, IROS, RSS. Journals: IEEE Robotics, IJRR, Nature Medicine, Radiology. Companies: Boston Dynamics, NASA, CMU, Google Health, Microsoft Healthcare, Stanford Health Care.\\n- Volunteering: Easter Egg Hunt. Food Bank (123 Main St, Anytown). Maundy Thursday service at Episcopal Church. Group volunteering, food drives, backpack program.\\n- Farm: Layer feed 50 lbs for $120 (10% discount = $108 net, $2.16/lb). Added 2 hens. Supplements: Calcium, protein, omega-3, probiotics, grit. Jam/Honey regulations: Cottage food laws, Food Handler's Card, permits, labeling (ingredient list, net quantity, allergen warning, no nutrition facts for jam/honey). Plow repurposing. Fencing north pasture. Chicken feed schedule: 1-1.5 lbs/hen/day. Transition feed: 25:75 ratio. Organic scratch grains 20 lbs.\\n- Dinner Party: Spicy mango margaritas. Appetizers: Grilled pineapple/prosciutto skewers, spicy shrimp ceviche. Main: Grilled jerk chicken with mango salsa, roasted sweet potatoes. Dessert: Coconut lime panna cotta with mango salsa. Cocktails: Watermelon Basil Margarita (Avion Silver, watermelon puree, basil syrup). Other cocktails: Paloma, Tequila Sour.\\n- NovaTech: API optimization. New Relic vs Datadog. New Relic chosen for transaction tracing/code profiling. Rollout plan: Pre-rollout, Implementation, Training, Post-rollout. Profiling tools: New Relic, Datadog, AppDynamics, VisualVM, YourKit. Benchmarking: JMeter, Gatling, Locust, Artillery, Postman, curl, wrk, HTTPie.\\n- Time Management/Freelancing: 9 years experience. Physical notebook -> digital tools. Tools: Todoist, Trello, Asana, Evernote, OneNote, RescueTime, Forest, Pomodoro. Freelance tools: Harvest, Toggl, And Co, FreshBooks, QuickBooks, Wave, Zoho Invoice, Invoice Ninja, Hubstaff, Paydirt. Pricing: Hourly, Fixed, Value-based, Retainer. Marketing: Social media, SEO, Facebook Ads (targeting photography/entrepreneurship, $20/day, CPC). SEO tools: Google Keyword Planner, Google Search Console, Ahrefs, SEMrush, Moz. Content calendar, KPIs (page views, bounce rate, CTR, social shares, leads, conversion rate).\\n- Swimming/Triathlon: Lap swimming. Pool finder tools: Swim.com, PoolFinder, USA Swimming. Filters: Morning hours, 25-yard, 78-80°F. Swim teams/masters programs. Equipment: Kickboards, pull buoys. Lane sharing/circle swimming. Training schedule: 5-6 days/week. Runs: Sat AM, Wed PM. Yoga: Tue/Thu. Swim: Wed PM, Fri AM. Cycling: Mon AM, Sun AM. Volleyball: Sun. Bike shops in 92101: The Bike Revolution, RIDE Cyclery, Pacific Beach Bike Shop, North Park Bike Shop. Bike fitting at RIDE Cyclery. Fitness tracker: Garmin Forerunner 945. Tennis tracking: Manual input, duration, distance, calories, intensity, stress, performance condition, recovery time. Third-party apps: Tennis Buddy, Zepp Tennis. Instructor: Alex.\\n- Fitness: Agility/Speed: Shuttle runs, cone drills, ladder drills, box jumps, sprints, resistance bands, hill sprints. Strength: Squats, lunges, deadlifts, calf raises, shoulder rotations, lat pulldowns, dumbbell rows, core. Tennis-specific: Med ball, resistance bands. Yoga: Hip flexor stretches, quad stretches, calf stretches. Foam rolling. Marathon recovery: Rest, gradual return, compression, ice baths, nutrition, hydration, elevation, massage.\\n- Shoes: Adidas running shoes ($80, Jan 10, outlet mall with sister). Brown leather boots (scuffed Feb 5 office party). Sneakers (basketball Feb 1). Converse shoelace broken Jan 24. Vans (borrowed by brother, returned Feb 10, tighter). Tevas ($120). Black stilettos (Rachel, Feb 5 office party). Cobbler tips: Ask around, online research, credentials, visit workshop. Leather care: Conditioning (Leatherology, Chamber's, Bickmore, Kiwi), Waterproofing (Nikwax, Sno-Seal, Scotchgard, Kiwi). Shoe cleaning: Mild soap, baking soda/vinegar, air dry. Vans restoration: Shoe trees, paper, heat, shoe stretcher, conditioner, freezer trick.\\n- Video Editing: Adobe Premiere Pro. Lumetri Color Panel: Color Match, Creative Panel, Curves Panel. Toe/Shoulder controls. Legacy vs Lumetri. Color Wheels. Best practices: Neutral grade, consistent color space, color script, dark to"
+  },
+  "cost": {
+    "baseline": {
+      "main_input_tokens": 10880077,
+      "main_output_tokens": 11183,
+      "compression_input_tokens": 0,
+      "compression_output_tokens": 0,
+      "total_input_tokens": 10880077,
+      "total_output_tokens": 11183,
+      "total_tokens": 10891260
+    },
+    "compressed": {
+      "main_input_tokens": 9121049,
+      "main_output_tokens": 7791,
+      "compression_input_tokens": 213676,
+      "compression_output_tokens": 4096,
+      "ingest_main_input_tokens": 947032,
+      "ingest_main_output_tokens": 140,
+      "probe_main_input_tokens": 8174017,
+      "probe_main_output_tokens": 7651,
+      "compression_calls": 1,
+      "total_input_tokens": 9334725,
+      "total_output_tokens": 11887,
+      "total_tokens": 9346612
+    },
+    "ratio": {
+      "input": 0.857964975799344,
+      "output": 1.0629526960565143,
+      "total": 0.8581754544469602
+    }
+  },
+  "per_category": {
+    "knowledge-update": {
+      "n": 9,
+      "baseline_accuracy": 0.0,
+      "compressed_accuracy": 0.5555555555555556,
+      "memory_retention": null
+    },
+    "multi-session": {
+      "n": 15,
+      "baseline_accuracy": 0.06666666666666667,
+      "compressed_accuracy": 0.26666666666666666,
+      "memory_retention": 4.0
+    },
+    "single-session-assistant": {
+      "n": 6,
+      "baseline_accuracy": 0.6666666666666666,
+      "compressed_accuracy": 0.6666666666666666,
+      "memory_retention": 1.0
+    },
+    "single-session-preference": {
+      "n": 6,
+      "baseline_accuracy": 0.16666666666666666,
+      "compressed_accuracy": 0.0,
+      "memory_retention": 0.0
+    },
+    "single-session-user": {
+      "n": 9,
+      "baseline_accuracy": 0.4444444444444444,
+      "compressed_accuracy": 0.6666666666666666,
+      "memory_retention": 1.5
+    },
+    "temporal-reasoning": {
+      "n": 15,
+      "baseline_accuracy": 0.2,
+      "compressed_accuracy": 0.06666666666666667,
+      "memory_retention": 0.3333333333333333
+    }
+  }
+}

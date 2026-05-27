@@ -1,0 +1,115 @@
+{
+  "dialogue_id": "longmemeval_s_star_d4",
+  "ctx_chars": 1646919,
+  "num_sessions": 113,
+  "num_questions": 60,
+  "summary_schema": "multi_topic",
+  "config": {
+    "token_threshold": 200000,
+    "keep_recent_pairs": 2,
+    "keep_recent_steps": 4,
+    "max_observation_length": 20000,
+    "summary_schema": "multi_topic",
+    "sessions_per_batch": 12,
+    "max_ingest_sessions": 0,
+    "ingest_max_steps": 2,
+    "probe_max_steps": 3,
+    "probe_concurrency": 5,
+    "probe_max_tokens": 512,
+    "baseline_context_chars": 800000,
+    "limit": 60
+  },
+  "baseline": {
+    "accuracy": 0.2833333333333333,
+    "n": 60
+  },
+  "compressed": {
+    "accuracy": 0.0,
+    "n": 60,
+    "memory_retention": 0.0,
+    "token_reduction": 0.8969461280527152,
+    "token_counts": {
+      "last_uncompressed": 410659,
+      "last_compressed": 42320
+    },
+    "num_batches": 10,
+    "num_sessions_ingested": 113,
+    "compression_boundary": {
+      "config_keep_recent_pairs": 2,
+      "config_keep_recent_steps": 2,
+      "previous_compressed_pairs": 0,
+      "previous_retained_pairs": 2,
+      "current_compressed_steps": 0,
+      "current_retained_steps": 2
+    },
+    "previous_summary": null
+  },
+  "cost": {
+    "baseline": {
+      "main_input_tokens": 10888810,
+      "main_output_tokens": 10508,
+      "compression_input_tokens": 0,
+      "compression_output_tokens": 0,
+      "total_input_tokens": 10888810,
+      "total_output_tokens": 10508,
+      "total_tokens": 10899318
+    },
+    "compressed": {
+      "main_input_tokens": 612806,
+      "main_output_tokens": 140,
+      "compression_input_tokens": 1225825,
+      "compression_output_tokens": 20786,
+      "ingest_main_input_tokens": 612806,
+      "ingest_main_output_tokens": 140,
+      "probe_main_input_tokens": 0,
+      "probe_main_output_tokens": 0,
+      "compression_calls": 6,
+      "total_input_tokens": 1838631,
+      "total_output_tokens": 20926,
+      "total_tokens": 1859557
+    },
+    "ratio": {
+      "input": 0.16885509068484067,
+      "output": 1.9914350970688999,
+      "total": 0.1706122346370663
+    }
+  },
+  "per_category": {
+    "knowledge-update": {
+      "n": 9,
+      "baseline_accuracy": 0.1111111111111111,
+      "compressed_accuracy": 0.0,
+      "memory_retention": 0.0
+    },
+    "multi-session": {
+      "n": 15,
+      "baseline_accuracy": 0.13333333333333333,
+      "compressed_accuracy": 0.0,
+      "memory_retention": 0.0
+    },
+    "single-session-assistant": {
+      "n": 6,
+      "baseline_accuracy": 0.5,
+      "compressed_accuracy": 0.0,
+      "memory_retention": 0.0
+    },
+    "single-session-preference": {
+      "n": 6,
+      "baseline_accuracy": 0.0,
+      "compressed_accuracy": 0.0,
+      "memory_retention": null
+    },
+    "single-session-user": {
+      "n": 9,
+      "baseline_accuracy": 0.8888888888888888,
+      "compressed_accuracy": 0.0,
+      "memory_retention": 0.0
+    },
+    "temporal-reasoning": {
+      "n": 15,
+      "baseline_accuracy": 0.2,
+      "compressed_accuracy": 0.0,
+      "memory_retention": 0.0
+    }
+  }
+}

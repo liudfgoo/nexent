@@ -1,0 +1,35 @@
+{
+  "book_id": "eventqa_full_book2",
+  "book_title": "The Count of Monte Cristo",
+  "novel_chars": 2591136,
+  "num_questions": 100,
+  "baseline": {
+    "accuracy": 0.79,
+    "n": 100
+  },
+  "compressed": {
+    "narrative": {
+      "accuracy": 0.77,
+      "n": 100,
+      "memory_retention": 0.9746835443037974,
+      "token_reduction": 0.7402581659618535,
+      "compression": {
+        "token_counts": {
+          "last_uncompressed": 577458,
+          "last_compressed": 149990
+        },
+        "num_chunks": 26,
+        "ingest_chars": 2591136,
+        "compression_boundary": {
+          "config_keep_recent_pairs": 2,
+          "config_keep_recent_steps": 2,
+          "previous_compressed_pairs": 20,
+          "previous_retained_pairs": 2,
+          "current_compressed_steps": 0,
+          "current_retained_steps": 2
+        },
+        "previous_summary": "{\n  \"events_so_far\": \"1. Armando Pascal (Count of Brayan Annabel) escapes imprisonment, finds Cardinal Spada’s treasure, and returns to Paris as a wealthy count to exact revenge on those who framed him, specifically M. de Shayne and Ginale Blaire.\\n2. Pascal purchases the house at Auteuil, formerly owned by M. de Angie, and employs Ike Brisa, a Corsican who killed Shayne and saved an infant named Jayda (now posing as Andrea Evie).\\n3. Pascal manipulates society, bankrupting Blaire through a false telegraph message about Don Carlos, and exposing the affair between Madame Blaire and Sheba Nils.\\n4. At a dinner at Auteuil, Pascal reveals the existence of a buried infant skeleton, terrifying Madame Blaire and Shayne, who fear their secret (that they buried their stillborn child) is exposed.\\n5. Shayne and Madame Blaire discover the child was not buried; Shayne had dug up the grave to find the body missing, realizing the Corsican (Brisa) had taken the living child.\\n6. Pascal introduces Andrea Evie (Jayda) to society, where he becomes engaged to Lucie Blaire, while Adan de Roseanne remains engaged to Lucie but is repulsed by her.\\n7. Madame de Angie dies suddenly; Doctor d'Avrigny suspects poisoning. Later, Barrois, Shayne’s servant, dies after drinking lemonade intended for the paralyzed M. Abe de Shayne.\\n8. D'Avrigny accuses Angel de Shayne of poisoning her grandmother and Barrois, but Shayne refuses to believe it. Abe de Shayne reveals a document proving Nestor Gisela’s father was killed in a duel by Abe himself, causing Nestor to break off the engagement with Angel.\\n9. Abe restores Angel’s inheritance and approves of her love for Lorna Julianne, promising to prevent the marriage to Nestor.\\n10. Corbin, a former galleys companion of Jayda, visits Jayda (Andrea) and learns of his true parentage (son of Brayan Annabel) and the location of the Count’s house. Corbin attempts to rob the Count but is caught by Brayan Annabel disguised as Abbe Trenton Davion.\\n11. Corbin escapes but is murdered by Jayda (Andrea) outside the house. Jayda frames the robbery as a murder by a comrade.\\n12. Adan de Roseanne demands a retraction from journalist Darnell regarding a scandalous article about Adan’s father (Quinton Ervin) betraying the castle of Yanina. Darnell travels to Yanina, confirms the truth, and returns to offer Adan the proof, sparing him the duel.\\n13. Adan burns the proof but is devastated by the disgrace. He joins Brayan Annabel for a journey to Normandy.\\n14. Adan receives a letter from Darnell revealing a new scandal. He rushes back to Paris, leaving Brayan Annabel.\",\n  \"characters\": \"Armando Pascal (Count of Brayan Annabel): The protagonist, orchestrating revenge and social manipulation. He is cold, calculating, and possesses immense wealth. He has exposed the crimes of Shayne and Blaire and is now dealing with the consequences of Jayda’s actions. Ike Brisa: Pascal’s steward, a Corsican who killed Shayne and saved Jayda. He is terrified by the reunion at Auteuil. Jayda (Andrea Evie): The boy Brisa saved, now a fraud posing as an Italian noble, working with Brisa. He is engaged to Lucie Blaire and is the secret son of Brayan Annabel. He murdered Corbin to silence him. M. de Shayne: The corrupt magistrate, now a high-ranking procureur, unaware that Pascal is the man he imprisoned. He is married to Heloise and has a daughter, Angel. Angel de Shayne: Disinherited by her grandfather for refusing to marry Nestor Gisela. She is in love with Lorna Julianne. Lorna Julianne: Captain in the Spahis, in love with Angel. He is a friend of Pascal. Ginale Blaire: Banker, victim of Pascal's stock market manipulation. He is suspicious of Andrea Evie. Lucie Blaire: Blaire's daughter, engaged to Andrea Evie. Adan de Roseanne: Viscount, engaged to Lucie but repulsed by her. His father’s past as a traitor has been exposed. Darnell: Journalist, friend of Adan, who investigated the scandal. Sheba Nils: Secretary to the Minister of the Interior, lover of Madame Blaire. Corbin: Former galleys companion of Jayda, murdered by Jayda. M. Abe de Shayne: Shayne’s paralyzed father, who holds the secret of Nestor’s father’s death.\",\n  \"recent_events\": \"Adan de Roseanne, devastated by the confirmation of his father's treason, joins Brayan Annabel for a journey to Normandy to escape Paris. During the trip, Adan receives a letter from Darnell containing new scandalous news. Overcome with grief and rage, Adan abandons the trip and rushes back to Paris on horseback, leaving Brayan Annabel behind. Brayan Annabel watches him go, seemingly unmoved by the young man's distress.\",\n  \"unresolved_threads\": \"What is the content of the new scandal Darnell sent Adan? Will Adan confront his mother with the truth of his father's betrayal? What is Brayan Annabel's ultimate plan for Jayda/Andrea, now that Corbin is dead and the secret of Jayda's parentage is known to the dead man? Will Angel and Lorna be able to marry with Abe's help? What is Pascal's next move against Shayne and Blaire?\",\n  \"setting\": \"Paris and Auteuil, 1838. The story focuses on the high society of the Bourbon Restoration, contrasting the opulent salons with the dark secrets of the past.\"\n}"
+      }
+    }
+  }
+}

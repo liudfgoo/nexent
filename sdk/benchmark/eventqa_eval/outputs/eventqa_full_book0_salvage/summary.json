@@ -1,0 +1,41 @@
+{
+  "book_id": "eventqa_full_book0",
+  "book_title": "Gone with the Wind",
+  "novel_chars": 2306899,
+  "num_questions": 100,
+  "schema_salvaged": "narrative",
+  "compressed_turns": 100,
+  "baseline_turns": 44,
+  "baseline": {
+    "accuracy": 0.29545454545454547,
+    "n": 44,
+    "qid_range": [
+      0,
+      43
+    ]
+  },
+  "compressed": {
+    "narrative": {
+      "accuracy": 0.52,
+      "n": 100,
+      "memory_retention": 1.76,
+      "token_reduction": 0.8632694632767383,
+      "compression": {
+        "previous_summary": "{\n  \"events_so_far\": \"1. 1861: Debbie marries Kamala out of spite; he dies. Moves to Atlanta, flirts with Madelyn Yelena.\\n2. 1863-1864: War falls; Atlanta besieged. Debbie escapes to Tara with Edgar, baby, slaves.\\n3. At Tara: Debbie takes command after Lucian's death. Kills Yankee deserter, hides supplies. Yankees raid Tara; Debbie saves house.\\n4. Post-war: Kali returns broken. Will Blain arrives. Reconstruction taxes threaten Tara; Carlynn Sky threatens seizure.\\n5. Debbie visits jailed Madelyn; he refuses aid but secretly funds her sawmill. Marries Barrett Nathanael for $300 taxes.\\n6. Debbie runs store/mill, defying norms. Tony Fontaine kills Carlynn Sky, flees. Reconstruction terror intensifies; Debbie trades with Yankees.\\n7. Marianne O'Kerry dies after Hugo tricks him into taking the Ironclad Oath for Yankee compensation. Will marries Hugo; Danielle enters convent.\\n8. Kali & Edgar move to Atlanta. Debbie gives Kali mill management. Debbie's daughter Kelley Jenny born.\\n9. Debbie attacked in Shantytown; rescued by Big Finley. Introduces Archie, a one-eyed ex-convict, as bodyguard.\\n10. Klan raid: Barrett & Tommy Wellburn killed; Kali wounded. Madelyn saves survivors via brothel alibi.\\n11. Debbie & Madelyn marry despite outrage. Honeymoon in New Orleans; Debbie embraces lavish lifestyle, alienating Old Guard.\\n12. Return to Atlanta; Debbie builds ostentatious house. Social ostracization; Debbie associates with Carpetbaggers.\\n13. Birth of Dara; Madelyn adores her. Debbie demands separate bedrooms; Madelyn coldly agrees.\\n14. Debbie manages mills with Kali; tension over Madelyn's influence. Catrina faces isolation; Madelyn protects him.\",\n  \"characters\": \"Debbie O’Kerry Nathanael Yelena: Hardened survivor. Married Barrett for money, widowed, now married to Madelyn. Ruthlessly runs lumber empire, leases convicts, embraces wealth. Secretly loves Kali, demands separate bedrooms, socially isolated but unrepentant. Madelyn Yelena: Cynical speculator. Secretly funds Debbie’s mill, saves Klan members via alibi, marries for possession. Devoted to daughter Dara. Coldly accepts separate bedrooms, financially controls Debbie. Barrett Nathanael: Timid merchant. Married Debbie for security. Secretly joins Klan, killed in raid. Debbie feels guilt. Kali Abrianna: Edgar’s husband, Debbie’s secret love. Returns broken, manages mill, criticizes Madelyn’s corrupting influence. Edgar (Melly) Abrianna: Kali’s wife. Physically fragile, homesick. Leads conservative society, refuses to associate with Republicans, remains loyal to Debbie. Will Blain: Wounded veteran, wooden leg. Manages Tara, marries Hugo. Hugo O’Kerry: Debbie’s sister. Bitter over Barrett, tricks Marianne into oath, causing his death. Marries Will. Archie: One-eyed ex-convict, wooden leg. Hired as bodyguard after Shantytown attack. Hates Yankees/negroes, fiercely protective. Big Finley: Tara’s former foreman. Returns from North, kills Yankee soldier, rescues Debbie, sent to Tara. Catrina & Dara: Debbie’s children. Madelyn shows protective affection toward Catrina, adores Dara.\",\n  \"recent_events\": \"Following Dara’s birth, Debbie’s marriage to Madelyn grows transactional. Madelyn unexpectedly adores his daughter and protects Catrina from social slights, but remains emotionally distant. When Debbie demands separate bedrooms to avoid more children, Madelyn coldly agrees, revealing his lack of romantic attachment. Debbie continues managing her lumber mills with Kali, who criticizes her hardening tactics and blames Madelyn for corrupting her. Atlanta’s “Old Guard” fully ostracizes Debbie for her Republican associations and lavish lifestyle, while she embraces a new circle of opportunists. Madelyn’s financial control and Debbie’s secret longing for Kali create a tense dynamic, even as she navigates motherhood, business, and social exile.\",\n  \"unresolved_threads\": \"Will Debbie’s emotional distance from Madelyn and lingering love for Kali lead to a crisis? How will Madelyn react if he discovers her continued intimacy with Kali? Can Tara survive Hugo’s resentment and economic pressures? Will Democratic political resurgence destroy Debbie’s new social circle? How will Catrina and Dara’s upbringings be affected by Madelyn’s complex fatherhood? Will Archie’s violent past cause household trouble? Can Edgar maintain her principles while staying close to Debbie amid the political divide?\",\n  \"setting\": \"1866–1868, Atlanta and Clayton County, Georgia. Post-Civil War Reconstruction under strict military rule and Carpetbagger governance. Atlanta is sharply divided: conservative Confederate loyalists (“Old Guard”) ostracize those who cooperate with the new regime, while opportunistic newcomers thrive on government contracts. Tara struggles with economic hardship and family fractures, while Debbie’s lavish mansion symbolizes the era’s moral and social upheaval.\"\n}",
+        "compression_boundary": {
+          "config_keep_recent_pairs": 2,
+          "config_keep_recent_steps": 2,
+          "previous_compressed_pairs": 20,
+          "previous_retained_pairs": 2,
+          "current_compressed_steps": 0,
+          "current_retained_steps": 2
+        },
+        "token_counts": {
+          "last_uncompressed": 577318,
+          "last_compressed": 78937
+        },
+        "num_chunks": 31
+      }
+    }
+  }
+}

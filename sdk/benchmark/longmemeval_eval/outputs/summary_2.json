@@ -1,0 +1,127 @@
+{
+  "total_dialogues": 1,
+  "questions_per_dialogue": 60,
+  "summary_schema": "multi_topic",
+  "config": {
+    "token_threshold": 200000,
+    "keep_recent_pairs": 2,
+    "keep_recent_steps": 4,
+    "max_observation_length": 20000,
+    "summary_schema": "multi_topic",
+    "sessions_per_batch": 12,
+    "max_ingest_sessions": 0,
+    "ingest_max_steps": 2,
+    "probe_max_steps": 3,
+    "probe_concurrency": 5,
+    "probe_max_tokens": 512,
+    "baseline_context_chars": 800000,
+    "limit": 60
+  },
+  "judge": "LLM_*",
+  "avg_baseline_accuracy": 0.21666666666666667,
+  "avg_compressed_accuracy": 0.25,
+  "avg_memory_retention": 1.1538461538461537,
+  "avg_token_reduction": 0.80427883061696,
+  "cost": {
+    "baseline": {
+      "main_input_tokens": 11109094,
+      "main_output_tokens": 8580,
+      "compression_input_tokens": 0,
+      "compression_output_tokens": 0,
+      "total_input_tokens": 11109094,
+      "total_output_tokens": 8580,
+      "total_tokens": 11117674
+    },
+    "compressed": {
+      "main_input_tokens": 5112253,
+      "main_output_tokens": 7939,
+      "compression_input_tokens": 834638,
+      "compression_output_tokens": 14718,
+      "total_input_tokens": 5946891,
+      "total_output_tokens": 22657,
+      "total_tokens": 5969548,
+      "ingest_main_input_tokens": 613359,
+      "ingest_main_output_tokens": 140,
+      "probe_main_input_tokens": 4498894,
+      "probe_main_output_tokens": 7799,
+      "compression_calls": 4
+    },
+    "ratio": {
+      "input": 0.535317371515625,
+      "output": 2.6406759906759905,
+      "total": 0.5369421697380226
+    }
+  },
+  "per_category": {
+    "knowledge-update": {
+      "avg_baseline_accuracy": 0.2222222222222222,
+      "avg_compressed_accuracy": 0.2222222222222222,
+      "avg_memory_retention": 1.0
+    },
+    "multi-session": {
+      "avg_baseline_accuracy": 0.06666666666666667,
+      "avg_compressed_accuracy": 0.3333333333333333,
+      "avg_memory_retention": 5.0
+    },
+    "single-session-assistant": {
+      "avg_baseline_accuracy": 0.0,
+      "avg_compressed_accuracy": 0.3333333333333333,
+      "avg_memory_retention": null
+    },
+    "single-session-preference": {
+      "avg_baseline_accuracy": 0.0,
+      "avg_compressed_accuracy": 0.0,
+      "avg_memory_retention": null
+    },
+    "single-session-user": {
+      "avg_baseline_accuracy": 0.6666666666666666,
+      "avg_compressed_accuracy": 0.4444444444444444,
+      "avg_memory_retention": 0.6666666666666666
+    },
+    "temporal-reasoning": {
+      "avg_baseline_accuracy": 0.26666666666666666,
+      "avg_compressed_accuracy": 0.13333333333333333,
+      "avg_memory_retention": 0.5
+    }
+  },
+  "per_dialogue": {
+    "longmemeval_s_star_d2": {
+      "baseline_accuracy": 0.21666666666666667,
+      "compressed": {
+        "accuracy": 0.25,
+        "memory_retention": 1.1538461538461537,
+        "token_reduction": 0.80427883061696
+      },
+      "cost": {
+        "baseline": {
+          "main_input_tokens": 11109094,
+          "main_output_tokens": 8580,
+          "compression_input_tokens": 0,
+          "compression_output_tokens": 0,
+          "total_input_tokens": 11109094,
+          "total_output_tokens": 8580,
+          "total_tokens": 11117674
+        },
+        "compressed": {
+          "main_input_tokens": 5112253,
+          "main_output_tokens": 7939,
+          "compression_input_tokens": 834638,
+          "compression_output_tokens": 14718,
+          "ingest_main_input_tokens": 613359,
+          "ingest_main_output_tokens": 140,
+          "probe_main_input_tokens": 4498894,
+          "probe_main_output_tokens": 7799,
+          "compression_calls": 4,
+          "total_input_tokens": 5946891,
+          "total_output_tokens": 22657,
+          "total_tokens": 5969548
+        },
+        "ratio": {
+          "input": 0.535317371515625,
+          "output": 2.6406759906759905,
+          "total": 0.5369421697380226
+        }
+      }
+    }
+  }
+}

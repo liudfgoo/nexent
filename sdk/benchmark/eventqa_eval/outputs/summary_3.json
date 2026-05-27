@@ -1,0 +1,28 @@
+{
+  "total_books": 1,
+  "questions_per_book": 98,
+  "summary_schemas": [
+    "narrative"
+  ],
+  "avg_baseline_accuracy": 0.8877551020408163,
+  "per_schema": {
+    "narrative": {
+      "avg_compressed_accuracy": 0.8686868686868687,
+      "avg_memory_retention": 0.9785208405898062,
+      "avg_token_reduction": 0.462040716512808
+    }
+  },
+  "per_book": {
+    "eventqa_full_book3": {
+      "book_title": "David Copperfield",
+      "baseline_accuracy": 0.8877551020408163,
+      "compressed": {
+        "narrative": {
+          "accuracy": 0.8686868686868687,
+          "memory_retention": 0.9785208405898062,
+          "token_reduction": 0.462040716512808
+        }
+      }
+    }
+  }
+}

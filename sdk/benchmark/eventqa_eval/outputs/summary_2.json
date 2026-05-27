@@ -1,0 +1,28 @@
+{
+  "total_books": 1,
+  "questions_per_book": 100,
+  "summary_schemas": [
+    "narrative"
+  ],
+  "avg_baseline_accuracy": 0.79,
+  "per_schema": {
+    "narrative": {
+      "avg_compressed_accuracy": 0.77,
+      "avg_memory_retention": 0.9746835443037974,
+      "avg_token_reduction": 0.7402581659618535
+    }
+  },
+  "per_book": {
+    "eventqa_full_book2": {
+      "book_title": "The Count of Monte Cristo",
+      "baseline_accuracy": 0.79,
+      "compressed": {
+        "narrative": {
+          "accuracy": 0.77,
+          "memory_retention": 0.9746835443037974,
+          "token_reduction": 0.7402581659618535
+        }
+      }
+    }
+  }
+}

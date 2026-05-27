@@ -1,0 +1,115 @@
+{
+  "dialogue_id": "longmemeval_s_star_d2",
+  "ctx_chars": 1715268,
+  "num_sessions": 116,
+  "num_questions": 60,
+  "summary_schema": "multi_topic",
+  "config": {
+    "token_threshold": 200000,
+    "keep_recent_pairs": 2,
+    "keep_recent_steps": 4,
+    "max_observation_length": 20000,
+    "summary_schema": "multi_topic",
+    "sessions_per_batch": 12,
+    "max_ingest_sessions": 0,
+    "ingest_max_steps": 2,
+    "probe_max_steps": 3,
+    "probe_concurrency": 5,
+    "probe_max_tokens": 512,
+    "baseline_context_chars": 800000,
+    "limit": 60
+  },
+  "baseline": {
+    "accuracy": 0.21666666666666667,
+    "n": 60
+  },
+  "compressed": {
+    "accuracy": 0.25,
+    "n": 60,
+    "memory_retention": 1.1538461538461537,
+    "token_reduction": 0.80427883061696,
+    "token_counts": {
+      "last_uncompressed": 414646,
+      "last_compressed": 81155
+    },
+    "num_batches": 10,
+    "num_sessions_ingested": 116,
+    "compression_boundary": {
+      "config_keep_recent_pairs": 2,
+      "config_keep_recent_steps": 2,
+      "previous_compressed_pairs": 545,
+      "previous_retained_pairs": 2,
+      "current_compressed_steps": 0,
+      "current_retained_steps": 2
+    },
+    "previous_summary": "{\n  \"topics\": \"1. Career Transition & Productivity — User is a senior marketing analyst transitioning from a startup role, looking to automate workflows in ClickUp and improve productivity with tools like Todoist and Trello. 2. Cooking & Meal Prep — User is planning dinner parties, learning to cook chicken fajitas, cauliflower gnocchi, and roasted vegetables. They are also meal prepping for fitness goals, focusing on high-protein vegan meals and quinoa. 3. Home Organization & Hobbies — User collects vintage cameras (17 total, including a Brownie Hawkeye), Funko POP figures (Marvel Cinematic Universe set), vinyl records (rare 1978 Fleetwood Mac Rumours), and posters (Mondo Harry Potter). 4. Fitness & Cycling — User is training for a sprint triathlon on June 24th, tracks bike mileage (347 miles YTD, goal 1000 miles), and plans road trips with bike racks (Saris Bones, Kuat Transfer). 5. Travel & Road Trips — User plans trips to Mount Rushmore, Aspen, and Miami. They have driven 1,200 miles in Yellowstone and 300 miles to Jackson, WY. 6. Gaming — User played The Last of Us Part II (25-30 hours), Assassin's Creed Odyssey (70 hours), and is interested in The Witcher 3, Red Dead Redemption 2, and indie games like Celeste and Hyper Light Drifter. 7. Music & Instruments — User plays guitar (Fender Stratocaster), is learning saxophone, and plays ukulele (Cordoba). They attend concerts (Billie Eilish, Queen) and festivals. 8. Personal Development & Mindset — User explores destiny, manifestation, and positive thinking. They are considering a career in the non-profit sector. 9. Social Media & Marketing — User manages Instagram and Twitter for a freelance writing business, focusing on engagement, hashtags, and content calendars. 10. Family & Gifts — User buys gifts for mom (lavender skincare), coworkers (custom desk accessories), and plans a trip to Costa Rica for birding.\",\n  \"topic_details\": \"- Career: Senior marketing analyst, previously managed interns at a startup. Uses ClickUp for automation (task assignment, data import). Uses Todoist and Trello for task management. Degree in Business Administration. Goal: 1000 bike miles by end of summer. Sprint triathlon on June 24th. 5K PB: 26:30 (later mentioned as 27:45 in one turn, then 26:30 again). Commute: 10 miles round trip. - Cooking: Made Lemon Garlic Chicken Breast with Roasted Vegetables, Cauliflower Gnocchi with Brown Butter Sage Sauce, Chicken Fajitas. Meal prepping for fitness. Vegan chili recipe posted on Instagram with #FoodieAdventures. - Home: 17 vintage cameras (Brownie Hawkeye acquired last week). Marvel Cinematic Universe Funko POP set. Rare 1978 Fleetwood Mac Rumours vinyl. Mondo Harry Potter poster. - Fitness: Bike mileage 347 miles YTD. Goal 1000 miles. Bike repairs in mid-February (gears). New bike lights ($40). Bell Zephyr helmet ($120). - Travel: Yellowstone trip: 1,200 miles, 4 days. Denver to Mount Rushmore route planned. Aspen trip planned with Maroon Lake stop. Miami trip planned for spring break (March) on Spirit Airlines. Costa Rica birding trip planned. - Gaming: The Last of Us Part II: 25 hours (normal), 30 hours (hard). Assassin's Creed Odyssey: 70 hours. Interested in The Witcher 3, Red Dead Redemption 2, Horizon Zero Dawn. Indie games: Celeste, Hyper Light Drifter, Ori and the Blind Forest, Gris. - Music: Fender Stratocaster (black, 5 years old). Learning saxophone. Ukulele: Cordoba models considered. Concerts: Billie Eilish at Wells Fargo Center (Philly) with sister. Queen with Adam Lambert at Prudential Center (Newark). - Personal: Parents are atheists. Friend Sarah discussed destiny. Mom's birthday is 15th of next month. - Social Media: Instagram followers grew from 250 to 350 in two weeks. Freelance writing business. - Gifts: Mom: Lavender Dreams Skincare Set. Coworkers: 5 coffee mugs with funny quotes ($60). Coworker birthdays: Custom desk accessories.\",\n  \"key_facts\": \"- dates_and_durations:\\n    - Sprint Triathlon: June 24th\\n    - Bike Mileage: 347 miles since start of year\\n    - Bike Mileage Goal: 1000 miles by end of summer\\n    - 5K Run PB: 26 minutes and 30 seconds (also mentioned 27:45 seconds in one turn)\\n    - Bike Lights Cost: $40\\n    - Bell Zephyr Helmet Cost: $120\\n    - Helmet Purchase Date: April 10th\\n    - Bike Tune-up Date: April 20th\\n    - Bike Repair Date: Mid-February\\n    - Mom's Birthday: 15th of next month\\n    - Billie Eilish Concert: Today (at Wells Fargo Center, Philly)\\n    - Queen Concert: Prudential Center, Newark, NJ\\n    - Yellowstone Trip: 4 days, 1,200 miles\\n    - Denver to Jackson, WY Drive: 300 miles\\n    - Denver to Mount Rushmore Drive: ~570 miles, 8-9 hours\\n    - Aspen Trip: June\\n    - Costa Rica Trip: Planned\\n    - Instagram Growth: 250 to 350 followers in 2 weeks\\n    - Audiobooks Finished: 3 in 6 weeks\\n    - The Nightingale Reading Time: 3 weeks\\n    - The Song of Achilles Audiobook Length: 11 hours and 22 minutes\\n    - The Brief Wondrous Life of Oscar Wao Audiobook Length: 14 hours and 13 minutes\\n    - All the Light We Cannot See Audiobook Length: 16 hours and 2 minutes\\n- quantities_and_amounts:\\n    - Vintage Cameras: 17 total\\n    - Coworker Coffee Mugs: 5\\n    - Coffee Mug Cost: $60\\n    - Desk Accessory Budget: $10-20 per coworker\\n    - Mom's Gift Budget: $100\\n    - Carbon Fiber Wheels Cost: $1,000 to $5,000+\\n    - Corolla Hybrid MPG: 53 city, 52 highway, 52 combined\\n    - Corolla Hybrid Bonus Cash: $500\\n    - Corolla Hybrid APR: 2.49% for 60 months\\n    - Corolla Hybrid Lease: $229/month for 36 months, $2,999 due at signing\\n    - Insurance Savings: $20/month\\n    - Spirit Airlines Carry-on Fee: $30-$45 online, $40-$55 at airport\\n    - Spirit Airlines Checked Bag Fee: $25-$40 online, $35-$50 at airport\\n    - Spirit Airlines Personal Item Size: 18 x 14 x 8 inches\\n    - Spirit Airlines Checked Bag Size: 62 linear inches\\n    - Spirit Airlines Checked Bag Weight: 40 lbs\\n    - Delta SkyMiles Balance: 10,000 miles\\n    - Citi AAdvantage Executive Card Sign-up Bonus: 50,000 miles after $5,000 spend in 3 months\\n    - Citi AAdvantage Executive Card Annual Fee: $450\\n    - Chase Sapphire Preferred Sign-up Bonus: 60,000 points after $4,000 spend in 3 months\\n    - Leadership Positions: 100 total\\n    - Women in Leadership: 20 positions\\n    - Instagram Followers: 350 (after 2 weeks)\\n- proper_names:\\n    - Camera: Brownie Hawkeye\\n    - Vinyl Record: Fleetwood Mac's Rumours (1978 pressing)\\n    - Poster: Mondo Harry Potter Hogwarts castle\\n    - Bike Rack: Saris Bones 2-Bike Trunk Rack, Kuat Transfer\\n    - Helmet: Bell Zephyr\\n    - Car: Toyota Corolla, 2022 Toyota Corolla Hybrid\\n    - Desktop Computer: HP Pavilion 24-inch All-in-One, Dell Inspiron 24 3000 Series\\n    - Piano: Korg B1\\n    - Guitar: Fender Stratocaster (black), Yamaha FG800 (acoustic)\\n    - Ukulele: Cordoba models (20TM, 25CK, 30TM)\\n    - Drum Set: 5-piece Pearl Export\\n    - Books: The Nightingale, The Seven Husbands of Evelyn Hugo, The Song of Achilles, The Brief Wondrous Life of Oscar Wao, All the Light We Cannot See, The Power, The Immortal Life of Henrietta Lacks, The Alice Network, The Lost Girls of Paris, The Women in the Castle, The Guernsey Literary and Potato Peel Pie Society, The Soldier's Wife, Those Who Save Us\\n    - Narrators: Frazer Douglas, Jonathan Davis, Zach Appelman\\n    - Apps: ClickUp, Todoist, Trello, Mint, Personal Capital, Strava, Garmin, Peloton\\n    - Brands: L'Occitane, Jo Malone, Dr. Hauschka, The Body Shop, Sephora, Godox, Sony, Nikon, Canon, Pelican, Nanuk, Think Tank Photo, Lowepro, Vello, Anker, Mophie, Jackery, EC Technology, RavPower, Gitzo, Saris, Kuat, Thule, Yakima, Coleman, Weber, Blackstone, Camp Chef, Uco Gear, LR Baggs, Fishman, Taylor, D'Addario, Planet Waves, MusicNomad, Oasis, TC Electronic, MXR, Xotic, Boss, Electro-Harmonix, Strymon, Ibanez, Fulltone, Wampler, MXR, Chase, Citi, American Airlines, Delta, JetBlue, Spirit Airlines, Hyatt, Hilton, Embassy Suites, Crowne Plaza, La Quinta, Marriott, Fairfield Inn, Sheraton, DoubleTree\\n- preferences_and_opinions:\\n    - User prefers simple and elegant designs for gifts\\n    - User prefers low-traffic scenic routes for road trips\\n    - User prefers non-stop flights when possible\\n    - User prefers acoustic-specific pedals for guitar\\n    - User prefers high-protein, low-carb vegan meals\\n    - User prefers natural remedies for dark circles\\n    - User prefers indie rock and psychedelic rock music\\n    - User prefers historical fiction with emotional depth\\n    - User prefers audiobooks for commuting\\n    - User prefers consistent social media posting\\n    - User prefers authentic and behind-the-scenes content on Instagram\"\n}"
+  },
+  "cost": {
+    "baseline": {
+      "main_input_tokens": 11109094,
+      "main_output_tokens": 8580,
+      "compression_input_tokens": 0,
+      "compression_output_tokens": 0,
+      "total_input_tokens": 11109094,
+      "total_output_tokens": 8580,
+      "total_tokens": 11117674
+    },
+    "compressed": {
+      "main_input_tokens": 5112253,
+      "main_output_tokens": 7939,
+      "compression_input_tokens": 834638,
+      "compression_output_tokens": 14718,
+      "ingest_main_input_tokens": 613359,
+      "ingest_main_output_tokens": 140,
+      "probe_main_input_tokens": 4498894,
+      "probe_main_output_tokens": 7799,
+      "compression_calls": 4,
+      "total_input_tokens": 5946891,
+      "total_output_tokens": 22657,
+      "total_tokens": 5969548
+    },
+    "ratio": {
+      "input": 0.535317371515625,
+      "output": 2.6406759906759905,
+      "total": 0.5369421697380226
+    }
+  },
+  "per_category": {
+    "knowledge-update": {
+      "n": 9,
+      "baseline_accuracy": 0.2222222222222222,
+      "compressed_accuracy": 0.2222222222222222,
+      "memory_retention": 1.0
+    },
+    "multi-session": {
+      "n": 15,
+      "baseline_accuracy": 0.06666666666666667,
+      "compressed_accuracy": 0.3333333333333333,
+      "memory_retention": 5.0
+    },
+    "single-session-assistant": {
+      "n": 6,
+      "baseline_accuracy": 0.0,
+      "compressed_accuracy": 0.3333333333333333,
+      "memory_retention": null
+    },
+    "single-session-preference": {
+      "n": 6,
+      "baseline_accuracy": 0.0,
+      "compressed_accuracy": 0.0,
+      "memory_retention": null
+    },
+    "single-session-user": {
+      "n": 9,
+      "baseline_accuracy": 0.6666666666666666,
+      "compressed_accuracy": 0.4444444444444444,
+      "memory_retention": 0.6666666666666666
+    },
+    "temporal-reasoning": {
+      "n": 15,
+      "baseline_accuracy": 0.26666666666666666,
+      "compressed_accuracy": 0.13333333333333333,
+      "memory_retention": 0.5
+    }
+  }
+}

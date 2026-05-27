@@ -1,0 +1,28 @@
+{
+  "total_books": 1,
+  "questions_per_book": 100,
+  "summary_schemas": [
+    "narrative"
+  ],
+  "avg_baseline_accuracy": 0.81,
+  "per_schema": {
+    "narrative": {
+      "avg_compressed_accuracy": 0.78,
+      "avg_memory_retention": 0.9629629629629629,
+      "avg_token_reduction": 0.74013494082513
+    }
+  },
+  "per_book": {
+    "eventqa_full_book4": {
+      "book_title": "Anna Karenina",
+      "baseline_accuracy": 0.81,
+      "compressed": {
+        "narrative": {
+          "accuracy": 0.78,
+          "memory_retention": 0.9629629629629629,
+          "token_reduction": 0.74013494082513
+        }
+      }
+    }
+  }
+}

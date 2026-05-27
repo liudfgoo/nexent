@@ -1,0 +1,115 @@
+{
+  "dialogue_id": "longmemeval_s_star_d1",
+  "ctx_chars": 1589693,
+  "num_sessions": 107,
+  "num_questions": 60,
+  "summary_schema": "multi_topic",
+  "config": {
+    "token_threshold": 200000,
+    "keep_recent_pairs": 2,
+    "keep_recent_steps": 4,
+    "max_observation_length": 20000,
+    "summary_schema": "multi_topic",
+    "sessions_per_batch": 12,
+    "max_ingest_sessions": 0,
+    "ingest_max_steps": 2,
+    "probe_max_steps": 3,
+    "probe_concurrency": 5,
+    "probe_max_tokens": 512,
+    "baseline_context_chars": 800000,
+    "limit": 60
+  },
+  "baseline": {
+    "accuracy": 0.16666666666666666,
+    "n": 60
+  },
+  "compressed": {
+    "accuracy": 0.31666666666666665,
+    "n": 60,
+    "memory_retention": 1.9,
+    "token_reduction": 0.1935811345707873,
+    "token_counts": {
+      "last_uncompressed": 214742,
+      "last_compressed": 173172
+    },
+    "num_batches": 9,
+    "num_sessions_ingested": 107,
+    "compression_boundary": {
+      "config_keep_recent_pairs": 2,
+      "config_keep_recent_steps": 2,
+      "previous_compressed_pairs": 335,
+      "previous_retained_pairs": 2,
+      "current_compressed_steps": 0,
+      "current_retained_steps": 2
+    },
+    "previous_summary": "{\n  \"topics\": \"1. Book Recommendations (Fiction & Historical) — User requested recommendations for historical fiction similar to 'The Nightingale' and later sci-fi/fantasy with strong female protagonists. 2. Audiobook & Genre Exploration — User discussed listening to 'Ready Player One' and 'The First Fifteen Lives of Harry August', and expressed interest in sci-fi/fantasy. 3. Jewelry Organization — User asked for help organizing a jewelry collection using a spreadsheet, specifically adding provenance/stories for sentimental pieces like a silver necklace from grandma and pearl earrings. 4. Travel Planning (LA & SF) — User planned a trip to LA, asked about United miles status (Premier Silver then Gold), transferring Chase points, and booking flights. Later planned a trip to San Francisco. 5. Tomato Gardening & Cooking — User discussed growing tomatoes, making pasta sauce, pickling cucumbers, and storing produce. 6. Deep Learning & NLP — User, a recent CS master's graduate, asked for resources on deep learning, transformers, BERT, and NLP applications like sentiment analysis and dialogue systems. 7. Guitar & Music — User discussed upgrading from a Stratocaster to a Les Paul, open D tuning, and coil-splitting. 8. Fitness & Weight Loss — User, age 32 (birthday Feb 12), sought workout and meal plan advice for weight loss, tracking progress, and triathlon training. 9. Wedding Planning — User planned a wedding, discussing venues (orchard/vineyard), decor, music, and gifts for cousin Alex (engineering grad). 10. Social Media Strategy — User sought advice on growing followers on Instagram, Facebook, Twitter, and TikTok, and creating content calendars. 11. Data Science Education — User planned to take Andrew Ng's Machine Learning course on Coursera and DataCamp courses on visualization.\",\n  \"topic_details\": \"- Book Recommendations: User finished 'The Nightingale' (440 pages, 5 weeks) and 'The Power' (341 pages, 5 weeks). Interested in 'The Handmaid's Tale', 'The Night Circus', 'The Alice Network', 'The Women in the Castle'. Also interested in mythology-inspired books like 'The Song of Achilles'.\\n- Audiobooks: Listening to 'Ready Player One' (halfway through) and 'The First Fifteen Lives of Harry August'.\\n- Jewelry: Organizing collection in spreadsheet. Specific items: Silver necklace from grandma (18th birthday, lost 2 months ago at friend's house), Pearl earrings from parents (high school graduation, worn on stats final 3 weeks ago), Gold chain with diamond cross pendant (borrowed from mom, needs silver clasp).\\n- Travel (LA): User has United MileagePlus. Reached 20,000 miles for Premier Silver, then later mentioned reaching Premier Gold. Interested in transferring Chase Ultimate Rewards (1:1 ratio) to United. Estimated taxes/fees for DC to LA award ticket: ~$19.50. \\n- Travel (SF): Planning trip from DC to SFO. Budget ~$400. Looking for non-stop flights (IAD) around $410-$430. Earning ~3,697.5 miles as Premier Gold.\\n- Tomatoes: User has 5 tomato plants, harvesting daily. Issues with yellowing leaves due to overwatering, corrected by reducing water. Making pasta sauce and pickles.\\n- Cucumbers: User has 3 cucumber plants. Making dill pickles using lacto-fermentation. Using kosher salt.\\n- Deep Learning/NLP: User has CS undergrad and just submitted Master's thesis. Interested in Transformers, BERT, attention mechanisms. Applications: Sentiment analysis (IMDB, SST-2 datasets), Aspect-Based Sentiment Analysis (Semeval-2014), Intent Detection (CLINC150), Dialogue Systems (Ubuntu Dialogue Corpus).\\n- Guitar: Considering Gibson Les Paul over Fender Stratocaster. Interested in Open D tuning (DADF#AD) and coil-splitting features.\\n- Fitness: User is 32 (DOB Feb 12). Volleyball team 'Net Ninjas' record 5-2. Training for sprint triathlon in 12 weeks. 5K time 32:15. No bike yet. \\n- Wedding: Cousin Alex graduated with engineering degree. User planning wedding, considering orchard/vineyard venues. Interested in custom wine blends and wine/cheese pairing stations.\\n- Social Media: Facebook followers ~800. Twitter followers grew from 420 to 540 in one month. TikTok gained ~200 followers in 3 weeks. Instagram stories get many views with 'Question' sticker.\\n- Data Science: Completed 12 courses on Coursera, 8 on edX. Planning to take Andrew Ng's ML course (11 weeks) and DataCamp's 'Data Visualization with Python: Matplotlib and Seaborn'.\",\n  \"key_facts\": \"- dates_and_durations:\\n    - The Power: read in December, 341 pages, 5 weeks\\n    - The Nightingale: 440 pages, 5 weeks\\n    - Silver necklace: lost 2 months ago at friend's house\\n    - Pearl earrings: worn on stats final 3 weeks ago\\n    - United miles: reached 20,000 miles (Premier Silver), later Premier Gold\\n    - DC to LA flight: estimated taxes/fees $19.50\\n    - User birthday: February 12th, age 32\\n    - Volleyball team: Net Ninjas, record 5-2\\n    - 5K run time: 32:15\\n    - Triathlon prep: 12 weeks\\n    - Twitter growth: 420 to 540 followers in one month\\n    - TikTok growth: ~200 followers in 3 weeks\\n    - Facebook followers: ~800\\n    - Andrew Ng ML course: 11 weeks duration\\n    - DataCamp course: 'Data Visualization with Python: Matplotlib and Seaborn'\\n- quantities_and_amounts:\\n    - The Power: 341 pages\\n    - The Nightingale: 440 pages\\n    - Silver necklace: lost 2 months ago\\n    - Pearl earrings: worn 3 weeks ago\\n    - United miles: 20,000 (Premier Silver)\\n    - DC to LA taxes: $19.50\\n    - User age: 32\\n    - Tomato plants: 5\\n    - Cucumber plants: 3\\n    - Volleyball record: 5-2\\n    - 5K time: 32:15\\n    - Triathlon prep: 12 weeks\\n    - Twitter followers: 420 -> 540\\n    - TikTok followers: +200\\n    - Facebook followers: 800\\n    - Andrew Ng course: 11 weeks\\n    - DataCamp course: Matplotlib and Seaborn\\n- proper_names:\\n    - Books: 'The Nightingale', 'The Power', 'The Handmaid's Tale', 'The Night Circus', 'The Alice Network', 'The Women in the Castle', 'The Song of Achilles', 'Ready Player One', 'The First Fifteen Lives of Harry August', 'Sapiens', 'The Power of Habit', 'Thinking, Fast and Slow', 'All the Light We Cannot See'\\n    - Authors: Kristin Hannah, Naomi Alderman, Margaret Atwood, Erin Morgenstern, Kate Quinn, Jessica Shattuck, Madeline Miller, Ernest Cline, Claire North, Yuval Noah Harari, Charles Duhigg, Daniel Kahneman, Anthony Doerr\\n    - People: Grandma (silver necklace), Parents (pearl earrings), Mom (gold chain), Friend (lost necklace), Rachel (yoga instructor), David (bookstore), Juan (mechanic), Lucy (animal shelter), Maria (chef), Alex (train), Juan (language tutor), Maria (tutor), John (English teacher), Alex (Germany/music festival), Emma (freelance writer), Rachel Lee (marketing workshop speaker)\\n    - Organizations: United Airlines, Chase Ultimate Rewards, Nordstrom, Coursera, edX, DataCamp, Kaggle, LinkedIn, Facebook, Twitter, TikTok, Instagram, Andrew Ng, MIT OpenCourseWare, Khan Academy\\n    - Places: LA, LAX, DC, IAD, DCA, SFO, San Francisco, Seattle, Berlin, Kreuzberg, New York City, Hawaii, Colombia, Bogotá, Gold Museum, Plaza de Bolívar\\n    - Concepts: Premier Silver, Premier Gold, Premier Platinum, Open D tuning, Lacto-fermentation, BERT, Transformers, Attention Mechanisms, Aspect-Based Sentiment Analysis, Intent Detection, Dialogue Systems\\n- preferences_and_opinions:\\n    - Reading: Enjoys historical fiction, mythology-inspired books, complex themes, emotional impact\\n    - Music: Enjoys indie rock, lo-fi, garage rock, shared interest with Alex\\n    - Food: Enjoys fresh tomatoes, cucumbers, pasta sauce, dill pickles, coffee\\n    - Travel: Prefers hostels, local cafes, outdoor activities, triathlon training\\n    - Tech: Interested in deep learning, data visualization, Python, Matplotlib, Seaborn\\n    - Fitness: Weight loss goals, volleyball, triathlon training\\n    - Wedding: Interested in orchard/vineyard venues, custom wine blends, wine/cheese stations\\n    - Social Media: Wants to grow followers, create content calendars, use interactive stickers\"\n}"
+  },
+  "cost": {
+    "baseline": {
+      "main_input_tokens": 10867268,
+      "main_output_tokens": 9600,
+      "compression_input_tokens": 0,
+      "compression_output_tokens": 0,
+      "total_input_tokens": 10867268,
+      "total_output_tokens": 9600,
+      "total_tokens": 10876868
+    },
+    "compressed": {
+      "main_input_tokens": 10377308,
+      "main_output_tokens": 9397,
+      "compression_input_tokens": 187759,
+      "compression_output_tokens": 2079,
+      "ingest_main_input_tokens": 796338,
+      "ingest_main_output_tokens": 126,
+      "probe_main_input_tokens": 9580970,
+      "probe_main_output_tokens": 9271,
+      "compression_calls": 1,
+      "total_input_tokens": 10565067,
+      "total_output_tokens": 11476,
+      "total_tokens": 10576543
+    },
+    "ratio": {
+      "input": 0.9721916308680342,
+      "output": 1.1954166666666666,
+      "total": 0.9723886508505941
+    }
+  },
+  "per_category": {
+    "knowledge-update": {
+      "n": 9,
+      "baseline_accuracy": 0.1111111111111111,
+      "compressed_accuracy": 0.3333333333333333,
+      "memory_retention": 3.0
+    },
+    "multi-session": {
+      "n": 15,
+      "baseline_accuracy": 0.13333333333333333,
+      "compressed_accuracy": 0.4666666666666667,
+      "memory_retention": 3.5
+    },
+    "single-session-assistant": {
+      "n": 6,
+      "baseline_accuracy": 0.16666666666666666,
+      "compressed_accuracy": 0.3333333333333333,
+      "memory_retention": 2.0
+    },
+    "single-session-preference": {
+      "n": 6,
+      "baseline_accuracy": 0.0,
+      "compressed_accuracy": 0.0,
+      "memory_retention": null
+    },
+    "single-session-user": {
+      "n": 9,
+      "baseline_accuracy": 0.3333333333333333,
+      "compressed_accuracy": 0.4444444444444444,
+      "memory_retention": 1.3333333333333333
+    },
+    "temporal-reasoning": {
+      "n": 15,
+      "baseline_accuracy": 0.2,
+      "compressed_accuracy": 0.2,
+      "memory_retention": 1.0
+    }
+  }
+}
