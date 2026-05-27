@@ -27,7 +27,7 @@ class OpenAIModel(OpenAIServerModel):
                  ssl_verify=True, model_factory: Optional[str] = None,
                  display_name: Optional[str] = None,
                  extra_body: Optional[Dict[str, Any]] = None,
-                 max_tokens: Optional[int] = 4096, *args, **kwargs):
+                 max_tokens: Optional[int] = None, *args, **kwargs):
         """
         Initialize OpenAI Model with observer and SSL verification option.
 
@@ -42,9 +42,9 @@ class OpenAIModel(OpenAIServerModel):
             extra_body: Optional dict merged into every chat.completions.create
                        request body. Useful for provider-specific switches
                        (e.g. Qwen3 ``chat_template_kwargs.enable_thinking``).
-            max_tokens: Per-call completion output cap (default 4096). Set
-                       None to leave provider default (unbounded). Bounds
-                       degenerate generation loops on long contexts.
+            max_tokens: Per-call completion output cap. Set an int value to
+                       bound degenerate generation loops; None (default)
+                       leaves provider default (unbounded).
             *args: Additional positional arguments for OpenAIServerModel
             **kwargs: Additional keyword arguments for OpenAIServerModel
         """

@@ -41,11 +41,10 @@ class ModelConfig(BaseModel):
     max_tokens: Optional[int] = Field(
         description=(
             "Per-call completion output cap forwarded to chat.completions.create. "
-            "Defaults to 4096 — enough for normal answers and reasoning while "
-            "bounding pathological generation loops where a model regurgitates "
-            "context. Set None to leave it provider-default (unbounded)."
+            "Set to an int value to bound pathological generation loops; "
+            "None leaves it provider-default (unbounded)."
         ),
-        default=4096,
+        default=None,
     )
 
 
