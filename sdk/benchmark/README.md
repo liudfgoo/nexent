@@ -11,7 +11,7 @@
 
 ---
 
-## 两条评估路径
+## 四条评估路径
 
 ```
 benchmark/
@@ -76,6 +76,21 @@ manual_cases/
   {"role": "assistant", "content": "..."}
 ]
 ```
+
+**对话历史特点**：
+
+全部 23 个 case 的 `history.json` 均为纯文本对话（无 tool call / Observation），模拟"跟 Agent 聊了一长段之后"的状态。对话轮数（user-assistant pair）分布如下：
+
+| 轮数范围 | case 数量 | 典型 case |
+|---|---|---|
+| 10–14 | 5 | `sci_paper`(10), `example_infra`(12), `algorithm_homework`(12), `nasr_002_ablation_results`(14) |
+| 15–19 | 11（主体） | `neuroai_*`(15), `qoulipo_*`(14–15), `agentrm_*`(18–19), `astro_002`/`003`(18) |
+| 20–23 | 5 | `alphaevolve_*`(20–22), `astro_001_simulation_setup`(22), `brain_001_target_reference`(23) |
+| 27–28 | 2 | `brain_002_recovery_profile`(28), `brain_003_pretrained_random`(27) |
+
+- **平均约 18 对，中位数 18 对**，范围 10–28 对
+- 全部为 `user → assistant` 交替结构，无多余 role，可直接作为 `AgentMemory` 的初始历史
+- 内容以**科研论文片段讨论**和**编程 / agent 任务对话**为主，每对消息的平均长度在 100–1,100 字符之间，长短差异较大（论文讨论类偏长，任务对话类偏短）
 
 
 #### 评估指标
