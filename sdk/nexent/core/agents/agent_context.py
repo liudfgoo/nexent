@@ -736,7 +736,11 @@ class ContextManager:
         # Fresh compression
         summary_text, is_cacheable = self._summarize_pairs(pairs_to_compress, model)
         # summary_text is valid, not None
-        if summary_text and is_cacheable:
+        # Always save to cache even for L3 fallback (is_cacheable=False), so that
+        # export_summary can capture the fallback content for benchmark inspection.
+        # The cache will be used for the current run's probe evaluation, but
+        # incremental compression will NOT reuse this cache (checked in _compress_previous_with_cache).
+        if summary_text:
             last_t, last_a = pairs_to_compress[-1]
             self._previous_summary_cache = PreviousSummaryCache(
                 summary_text=summary_text,
@@ -745,7 +749,6 @@ class ContextManager:
                     last_t.task or "", self._action_content(last_a)
                 ),
             )
-        # is_cacheable is False, PreviousSummaryCache keep as is
         return summary_text
 
     def _action_content(self, action: ActionStep) -> str:
