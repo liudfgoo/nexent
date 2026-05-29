@@ -10,6 +10,7 @@ import logging
 import threading
 import asyncio
 import time
+import httpx
 from typing import List, Optional, Dict, Any
 
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
@@ -58,13 +59,16 @@ class OpenAIModel(OpenAIServerModel):
         self.extra_body = extra_body or None
         self.max_tokens = max_tokens
 
-        # Create http_client based on ssl_verify parameter
-        if not ssl_verify:
-            from openai import DefaultHttpxClient
-            http_client = DefaultHttpxClient(verify=False)
-            client_kwargs = kwargs.get('client_kwargs', {})
-            client_kwargs['http_client'] = http_client
-            kwargs['client_kwargs'] = client_kwargs
+        # Build an http_client with an explicit, tight timeout so a stalled
+        # endpoint fails fast (read=150s) instead of the OpenAI default 600s.
+        # connect stays short; applies whether or not SSL verification is on.
+        import httpx
+        from openai import DefaultHttpxClient
+        timeout = httpx.Timeout(connect=5.0, read=150.0, write=150.0, pool=150.0)
+        http_client = DefaultHttpxClient(verify=ssl_verify, timeout=timeout)
+        client_kwargs = kwargs.get('client_kwargs', {})
+        client_kwargs['http_client'] = http_client
+        kwargs['client_kwargs'] = client_kwargs
 
         super().__init__(*args, **kwargs)
 
@@ -146,129 +150,154 @@ class OpenAIModel(OpenAIServerModel):
         if self.max_tokens is not None and "max_tokens" not in completion_kwargs:
             completion_kwargs["max_tokens"] = self.max_tokens
 
-        current_request = self.client.chat.completions.create(
-            stream=True, **completion_kwargs)
-        chunk_list = []
-        token_join = []
-        role = None
+        # Fail fast + retry with backoff against a stalled/unreachable endpoint.
+        # The client read timeout (set in __init__) bounds each attempt; here we
+        # retry the streaming call on timeout/connection errors, but only before
+        # any token has been emitted, so partial output is never streamed twice.
+        from openai import APITimeoutError, APIConnectionError
+        retryable_exc = (APITimeoutError, APIConnectionError,
+                         httpx.TimeoutException, httpx.TransportError)
+        max_attempts = 3
 
-        # Reset output mode
-        self.observer.current_mode = ProcessType.MODEL_OUTPUT_THINKING
+        for attempt in range(max_attempts):
+            chunk_list = []
+            token_join = []
+            role = None
 
-        # Track streaming metrics
-        stream_start_time = time.time()
-        first_token_received = False
+            # Reset output mode
+            self.observer.current_mode = ProcessType.MODEL_OUTPUT_THINKING
 
-        try:
-            for chunk in current_request:
-                if not chunk.choices:
+            # Track streaming metrics
+            stream_start_time = time.time()
+            first_token_received = False
+
+            try:
+                current_request = self.client.chat.completions.create(
+                    stream=True, **completion_kwargs)
+                for chunk in current_request:
+                    if not chunk.choices:
+                        chunk_list.append(chunk)
+                        continue
+
+                    new_token = chunk.choices[0].delta.content
+                    reasoning_content = getattr(
+                        chunk.choices[0].delta, 'reasoning_content', None)
+
+                    # Handle reasoning_content if it exists and is not null
+                    if reasoning_content is not None:
+                        self.observer.add_model_reasoning_content(
+                            reasoning_content)
+                        if token_tracker and not first_token_received:
+                            token_tracker.record_first_token()
+                            first_token_received = True
+
+                    if new_token is not None:
+                        # Record first token timing
+                        if token_tracker and not first_token_received:
+                            token_tracker.record_first_token()
+                            first_token_received = True
+
+                        # Track each token
+                        if token_tracker:
+                            token_tracker.record_token(new_token)
+
+                        self.observer.add_model_new_token(new_token)
+                        token_join.append(new_token)
+                        role = chunk.choices[0].delta.role
+
                     chunk_list.append(chunk)
+                    if self.stop_event.is_set():
+                        if token_tracker:
+                            self._monitoring.add_span_event("model_stopped", {
+                                "reason": "stop_event_set"})
+                        raise RuntimeError(
+                            "Model is interrupted by stop event")
+
+                # Send end marker
+                self.observer.flush_remaining_tokens()
+                model_output = "".join(token_join)
+
+                # Extract token usage
+                input_tokens = 0
+                output_tokens = 0
+                if chunk_list and chunk_list[-1].usage is not None:
+                    usage = chunk_list[-1].usage
+                    input_tokens = usage.prompt_tokens
+                    output_tokens = usage.completion_tokens if hasattr(
+                        usage, 'completion_tokens') else usage.total_tokens
+                    self.last_input_token_count = input_tokens
+                    self.last_output_token_count = output_tokens
+                else:
+                    input_text = ""
+                    for msg in messages_for_completion:
+                        if hasattr(msg, 'content'):
+                            content = msg.content
+                            if isinstance(content, str):
+                                input_text += content
+                            elif isinstance(content, list):
+                                for part in content:
+                                    if isinstance(part, dict) and part.get("type") == "text":
+                                        input_text += part.get("text", "")
+                    input_tokens = estimate_tokens_text(input_text)
+                    output_tokens = estimate_tokens_text(model_output)
+                    self.last_input_token_count = input_tokens
+                    self.last_output_token_count = output_tokens
+                    logger.debug(
+                        f"Token usage not returned by API, using estimation: "
+                        f"input_tokens={input_tokens}, output_tokens={output_tokens}"
+                    )
+
+                # Record completion metrics
+                if token_tracker:
+                    token_tracker.record_completion(
+                        input_tokens, output_tokens)
+
+                if token_tracker:
+                    total_duration = time.time() - stream_start_time
+                    self._monitoring.add_span_event("completion_finished", {
+                        "total_duration": total_duration,
+                        "output_length": len(model_output),
+                        "chunk_count": len(chunk_list)
+                    })
+
+                message = ChatMessage.from_dict(
+                    ChatCompletionMessage(role=role if role else "assistant",  # If there is no explicit role, default to "assistant"
+                                          content=model_output).model_dump(include={"role", "content", "tool_calls"}))
+
+                from smolagents.monitoring import TokenUsage
+
+                if input_tokens > 0 or output_tokens > 0:
+                    message.token_usage = TokenUsage(
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens
+                    )
+                message.raw = current_request
+                message.role = MessageRole.ASSISTANT
+                return message
+
+            except retryable_exc as e:
+                # Retry only if nothing was streamed yet (so we never emit
+                # partial output twice). Exponential backoff: 2s, 4s, ...
+                if not first_token_received and attempt < max_attempts - 1:
+                    sleep_s = 2.0 * (2 ** attempt)
+                    logger.warning(
+                        f"LLM call timed out / connection error "
+                        f"(attempt {attempt + 1}/{max_attempts}); retrying in "
+                        f"{sleep_s:.0f}s: {type(e).__name__}: {e}")
+                    time.sleep(sleep_s)
                     continue
+                if token_tracker:
+                    self._monitoring.add_span_event("error_occurred", {
+                        "error_type": type(e).__name__, "error_message": str(e)})
+                raise
+            except Exception as e:
+                if token_tracker:
+                    self._monitoring.add_span_event("error_occurred", {"error_type": type(
+                        e).__name__, "error_message": str(e)})
 
-                new_token = chunk.choices[0].delta.content
-                reasoning_content = getattr(
-                    chunk.choices[0].delta, 'reasoning_content', None)
-
-                # Handle reasoning_content if it exists and is not null
-                if reasoning_content is not None:
-                    self.observer.add_model_reasoning_content(
-                        reasoning_content)
-                    if token_tracker and not first_token_received:
-                        token_tracker.record_first_token()
-                        first_token_received = True
-
-                if new_token is not None:
-                    # Record first token timing
-                    if token_tracker and not first_token_received:
-                        token_tracker.record_first_token()
-                        first_token_received = True
-
-                    # Track each token
-                    if token_tracker:
-                        token_tracker.record_token(new_token)
-
-                    self.observer.add_model_new_token(new_token)
-                    token_join.append(new_token)
-                    role = chunk.choices[0].delta.role
-
-                chunk_list.append(chunk)
-                if self.stop_event.is_set():
-                    if token_tracker:
-                        self._monitoring.add_span_event("model_stopped", {
-                            "reason": "stop_event_set"})
-                    raise RuntimeError(
-                        "Model is interrupted by stop event")
-
-            # Send end marker
-            self.observer.flush_remaining_tokens()
-            model_output = "".join(token_join)
-
-            # Extract token usage
-            input_tokens = 0
-            output_tokens = 0
-            if chunk_list and chunk_list[-1].usage is not None:
-                usage = chunk_list[-1].usage
-                input_tokens = usage.prompt_tokens
-                output_tokens = usage.completion_tokens if hasattr(
-                    usage, 'completion_tokens') else usage.total_tokens
-                self.last_input_token_count = input_tokens
-                self.last_output_token_count = output_tokens
-            else:
-                input_text = ""
-                for msg in messages_for_completion:
-                    if hasattr(msg, 'content'):
-                        content = msg.content
-                        if isinstance(content, str):
-                            input_text += content
-                        elif isinstance(content, list):
-                            for part in content:
-                                if isinstance(part, dict) and part.get("type") == "text":
-                                    input_text += part.get("text", "")
-                input_tokens = estimate_tokens_text(input_text)
-                output_tokens = estimate_tokens_text(model_output)
-                self.last_input_token_count = input_tokens
-                self.last_output_token_count = output_tokens
-                logger.debug(
-                    f"Token usage not returned by API, using estimation: "
-                    f"input_tokens={input_tokens}, output_tokens={output_tokens}"
-                )
-
-            # Record completion metrics
-            if token_tracker:
-                token_tracker.record_completion(
-                    input_tokens, output_tokens)
-
-            if token_tracker:
-                total_duration = time.time() - stream_start_time
-                self._monitoring.add_span_event("completion_finished", {
-                    "total_duration": total_duration,
-                    "output_length": len(model_output),
-                    "chunk_count": len(chunk_list)
-                })
-
-            message = ChatMessage.from_dict(
-                ChatCompletionMessage(role=role if role else "assistant",  # If there is no explicit role, default to "assistant"
-                                      content=model_output).model_dump(include={"role", "content", "tool_calls"}))
-
-            from smolagents.monitoring import TokenUsage
-
-            if input_tokens > 0 or output_tokens > 0:
-                message.token_usage = TokenUsage(
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens
-                )
-            message.raw = current_request
-            message.role = MessageRole.ASSISTANT
-            return message
-
-        except Exception as e:
-            if token_tracker:
-                self._monitoring.add_span_event("error_occurred", {"error_type": type(
-                    e).__name__, "error_message": str(e)})
-
-            if "context_length_exceeded" in str(e):
-                raise ValueError(f"Token limit exceeded: {str(e)}")
-            raise e
+                if "context_length_exceeded" in str(e):
+                    raise ValueError(f"Token limit exceeded: {str(e)}")
+                raise e
 
     async def check_connectivity(self) -> bool:
         """

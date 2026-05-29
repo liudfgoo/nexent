@@ -16,8 +16,15 @@ comparison — but adapted to a long-document memory task:
 
 Both arms answer the SAME 100 questions, so the retention ratio is clean:
 
-    memory_retention = compressed_accuracy / baseline_accuracy
-    token_reduction  = 1 - last_compressed_tokens / last_uncompressed_tokens
+    memory_retention   = compressed_accuracy / baseline_accuracy
+    token_reduction    = 1 - last_compressed_tokens / last_uncompressed_tokens
+    net_token_reduction = (baseline_main_in - compressed_main_in - compression_cost)
+                          / baseline_main_in
+
+``token_reduction`` is a per-probe context snapshot at the compression boundary;
+``net_token_reduction`` is the end-to-end wallet — gross main-input savings minus
+the tokens spent on the compression LLM itself — so it can be negative when the
+compression cost outweighs the savings. (Mirrors manual_cases' metric.)
 
 Continuation is not measured — EventQA questions are independent MCQs.
 
@@ -47,9 +54,30 @@ from agent_runner import (
 )
 from nexent.core.agents.agent_model import AgentHistory
 from nexent.core.agents.agent_context import ContextManager
+from nexent.core.utils.token_estimation import estimate_tokens_text
 
 from dataset import load_books, EventQABook
 from eval_utils import score_mcq
+
+
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Truncate text to <= max_tokens, measured by estimate_tokens_text.
+
+    Uses the SAME token primitive the ContextManager applies for
+    token_threshold, so the baseline window and the compression trigger are
+    expressed on one scale. The estimator is not an encoder we can slice, so
+    binary-search the char prefix length (estimate is monotonic in length).
+    """
+    if max_tokens <= 0 or not text or estimate_tokens_text(text) <= max_tokens:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if estimate_tokens_text(text[:mid]) <= max_tokens:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo]
 
 
 # ============ Agent duty prompts ============
@@ -398,7 +426,7 @@ async def run_book(book: EventQABook, args) -> dict:
     baseline_results: list[dict] = []
     baseline_probe_tokens = {"main_input_tokens": 0, "main_output_tokens": 0}
     if not args.skip_baseline:
-        truncated = book.context[:args.baseline_context_chars]
+        truncated = _truncate_to_tokens(book.context, args.baseline_context_tokens)
         baseline_history = [
             AgentHistory(
                 role="user",
@@ -406,8 +434,8 @@ async def run_book(book: EventQABook, args) -> dict:
             ),
             AgentHistory(role="assistant", content="OK, I have read the novel."),
         ]
-        print(f"  [baseline] novel truncated to {len(truncated)} chars, "
-              f"running {len(items)} probes ...")
+        print(f"  [baseline] novel truncated to ~{estimate_tokens_text(truncated):,} tokens "
+              f"({len(truncated):,} chars), running {len(items)} probes ...")
         baseline_results, baseline_probe_tokens = await run_probes(
             items, baseline_history, args
         )
@@ -417,6 +445,10 @@ async def run_book(book: EventQABook, args) -> dict:
         return sum(r["score"] for r in rows) / len(rows) if rows else 0.0
 
     baseline_acc = accuracy(baseline_results)
+
+    # Build the end-to-end cost block up front so each schema's metrics can
+    # pull the cost-aware net_token_reduction from it.
+    cost = _build_cost(baseline_probe_tokens, compressed)
 
     compressed_report: dict[str, dict] = {}
     for schema_name, data in compressed.items():
@@ -435,11 +467,15 @@ async def run_book(book: EventQABook, args) -> dict:
                 token_reduction = 1 - comp / unc
 
         cm_summary = data["compression"]["cm_summary"]
+        net_token_reduction = (
+            (cost.get("ratio") or {}).get(schema_name, {}).get("net_token_reduction")
+        )
         compressed_report[schema_name] = {
             "accuracy": c_acc,
             "n": len(data["results"]),
             "memory_retention": memory_retention,
             "token_reduction": token_reduction,
+            "net_token_reduction": net_token_reduction,
             "compression": {
                 "token_counts": data["compression"]["token_counts"],
                 "num_chunks": data["compression"]["num_chunks"],
@@ -449,7 +485,6 @@ async def run_book(book: EventQABook, args) -> dict:
             },
         }
 
-    cost = _build_cost(baseline_probe_tokens, compressed)
     report = {
         "book_id": book.book_id,
         "book_title": book.book_title,
@@ -466,7 +501,8 @@ async def run_book(book: EventQABook, args) -> dict:
     for schema_name, c in compressed_report.items():
         line += (f"  |  {schema_name}: acc={_fmt(c['accuracy'])} "
                  f"retention={_fmt(c['memory_retention'])} "
-                 f"token_reduction={_fmt(c['token_reduction'])}")
+                 f"token_reduction={_fmt(c['token_reduction'])} "
+                 f"net_token_reduction={_fmt(c['net_token_reduction'])}")
     print(line)
     base_total = cost["baseline"]["total_tokens"]
     if base_total and cost.get("compressed"):
@@ -498,10 +534,27 @@ def _build_run_config(args) -> dict:
         "probe_max_steps": args.probe_max_steps,
         "probe_concurrency": args.probe_concurrency,
         "probe_max_tokens": args.probe_max_tokens,
-        "baseline_context_chars": args.baseline_context_chars,
+        "baseline_context_tokens": args.baseline_context_tokens,
         "limit": args.limit,
         "question_start": args.question_start,
     }
+
+
+def _net_token_reduction(baseline_main_in: int, comp_main_in: int,
+                         comp_cmp_in: int, comp_cmp_out: int):
+    """Cost-aware reduction of main-LLM input tokens.
+
+    gross savings (baseline main input - compressed main input) minus the
+    tokens spent on the compression LLM itself, normalized by the baseline.
+    Unlike ``token_reduction`` (a per-probe context snapshot) this charges the
+    compression calls against the savings, so it can be negative when
+    compression costs more than it saves. Mirrors manual_cases' metric.
+    """
+    if not baseline_main_in or baseline_main_in <= 0:
+        return None
+    comp_cost = (comp_cmp_in or 0) + (comp_cmp_out or 0)
+    gross = baseline_main_in - comp_main_in
+    return (gross - comp_cost) / baseline_main_in
 
 
 def _build_cost(baseline_probe_tokens: dict, compressed: dict[str, dict]) -> dict:
@@ -558,6 +611,8 @@ def _build_cost(baseline_probe_tokens: dict, compressed: dict[str, dict]) -> dic
             "input": _ratio(compressed_costs[schema_name]["total_input_tokens"], baseline["total_input_tokens"]),
             "output": _ratio(compressed_costs[schema_name]["total_output_tokens"], baseline["total_output_tokens"]),
             "total": _ratio(compressed_costs[schema_name]["total_tokens"], baseline["total_tokens"]),
+            "net_token_reduction": _net_token_reduction(
+                baseline["main_input_tokens"], comp_main_in, comp_cmp_in, comp_cmp_out),
         }
     return {"baseline": baseline, "compressed": compressed_costs, "ratio": ratios}
 
@@ -596,6 +651,9 @@ def _aggregate_costs(costs: list[dict | None]) -> dict:
             "input": _ratio(sub["total_input_tokens"], baseline_agg["total_input_tokens"]),
             "output": _ratio(sub["total_output_tokens"], baseline_agg["total_output_tokens"]),
             "total": _ratio(sub["total_tokens"], baseline_agg["total_tokens"]),
+            "net_token_reduction": _net_token_reduction(
+                baseline_agg["main_input_tokens"], sub["main_input_tokens"],
+                sub["compression_input_tokens"], sub["compression_output_tokens"]),
         }
     return {
         "baseline": baseline_agg,
@@ -658,7 +716,7 @@ async def main(args):
     print(f"  Compressed schema(s):  {', '.join(schemas)}")
     print(f"  Token threshold:       {args.token_threshold}")
     print(f"  Chunk chars:           {args.chunk_chars}")
-    print(f"  Baseline ctx chars:    {args.baseline_context_chars}")
+    print(f"  Baseline ctx tokens:   {args.baseline_context_tokens}")
     print(f"  Max ingest chars:      {args.max_ingest_chars or 'full novel'}")
     print(f"{'=' * 60}")
 
@@ -693,6 +751,8 @@ async def main(args):
                 [r["compressed"][schema_name]["memory_retention"] for r in books_with]),
             "avg_token_reduction": _avg(
                 [r["compressed"][schema_name]["token_reduction"] for r in books_with]),
+            "avg_net_token_reduction": _avg(
+                [r["compressed"][schema_name].get("net_token_reduction") for r in books_with]),
         }
 
     # Cross-book cost aggregate: sum absolute tokens across books so the
@@ -716,6 +776,7 @@ async def main(args):
                         "accuracy": c["accuracy"],
                         "memory_retention": c["memory_retention"],
                         "token_reduction": c["token_reduction"],
+                        "net_token_reduction": c.get("net_token_reduction"),
                     }
                     for s, c in r["compressed"].items()
                 },
@@ -739,7 +800,8 @@ async def main(args):
     for schema_name, m in per_schema.items():
         print(f"  [compressed:{schema_name}] acc={_fmt(m['avg_compressed_accuracy'])}  "
               f"retention={_fmt(m['avg_memory_retention'])}  "
-              f"token_reduction={_fmt(m['avg_token_reduction'])}")
+              f"token_reduction={_fmt(m['avg_token_reduction'])}  "
+              f"net_token_reduction={_fmt(m['avg_net_token_reduction'])}")
     if cost_agg.get("compressed") and cost_agg["baseline"]["total_tokens"]:
         b = cost_agg["baseline"]
         print(f"  cost (sum across books):")
@@ -748,7 +810,8 @@ async def main(args):
             r = cost_agg["ratio"][schema_name]
             print(f"    compressed[{schema_name}]  main={c['main_input_tokens']:>12,} in / {c['main_output_tokens']:>10,} out  "
                   f"compression={c['compression_input_tokens']:,} in / {c['compression_output_tokens']:,} out  total={c['total_tokens']:,}")
-            print(f"      ratio  input={_fmt(r['input'])}  output={_fmt(r['output'])}  total={_fmt(r['total'])}")
+            print(f"      ratio  input={_fmt(r['input'])}  output={_fmt(r['output'])}  total={_fmt(r['total'])}  "
+                  f"net_token_reduction={_fmt(r['net_token_reduction'])}")
     print(f"  Summary saved to {summary_path}")
     print(f"{'=' * 60}")
 
@@ -780,9 +843,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                              "(novel-oriented schema), or 'both' (run each and compare)")
     parser.add_argument("--chunk_chars", type=int, default=20000,
                         help="Characters per novel chunk fed during ingest")
-    parser.add_argument("--baseline_context_chars", type=int, default=480000,
-                        help="Characters of the novel fed to the baseline arm "
-                             "(truncate to the model's context window)")
+    parser.add_argument("--baseline_context_tokens", type=int, default=240000,
+                        help="Token budget of the novel fed to the baseline arm, "
+                             "measured by estimate_tokens_text (same primitive as "
+                             "token_threshold). Default 240000 leaves headroom under "
+                             "a 256k context window for the system prompt + question "
+                             "+ answer.")
     parser.add_argument("--max_ingest_chars", type=int, default=0,
                         help="Cap the novel length ingested in the compressed arm "
                              "(0 = full novel; use a small value for smoke tests)")

@@ -127,7 +127,7 @@ cd /home/feiran/nexent/sdk/benchmark/eventqa_eval
     --max_ingest_chars 200000 --chunk_chars 100000 \
     --token_threshold 200000 \
     --summary_schema narrative \
-    --baseline_context_chars 200000
+    --baseline_context_tokens 50000
 ```
 
 预期：终端最后打印 `RESULT: baseline_acc=... | narrative: acc=... ... token_reduction=...`，
@@ -145,7 +145,7 @@ cd /home/feiran/nexent/sdk/benchmark/eventqa_eval
     --book_index 0 \
     --token_threshold 200000 --chunk_chars 100000 \
     --summary_schema narrative \
-    --baseline_context_chars 800000
+    --baseline_context_tokens 200000
 ```
 
 - 去掉 `--limit` = 跑全部 100 题
@@ -189,7 +189,7 @@ NEXENT_CONTEXT_DEBUG=/tmp/eventqa_book0_narr.jsonl \
       --book_index 0 \
       --token_threshold 200000 --chunk_chars 100000 \
       --summary_schema narrative \
-      --baseline_context_chars 800000
+      --baseline_context_tokens 200000
 ```
 
 参数和 `run_eventqa.py` 一样，原样转发。trace 写到 `$NEXENT_CONTEXT_DEBUG`。
@@ -203,7 +203,7 @@ NEXENT_CONTEXT_DEBUG=/tmp/eventqa_narr_trace.jsonl \
       --book_index 0 --limit 1 \
       --token_threshold 200000 --chunk_chars 100000 \
       --summary_schema narrative \
-      --baseline_context_chars 800000
+      --baseline_context_tokens 200000
 ```
 
 ### 4.2 导入 Langfuse
@@ -246,7 +246,7 @@ cd /home/feiran/nexent/sdk
 | `--token_threshold` | `200000` | 压缩触发阈值，模仿 glm-5 200K 窗口生产配置 |
 | `--chunk_chars` | `100000` | 小说切块粒度（~23k tokens/chunk，整本 ~23 块）|
 | `--summary_schema` | `narrative` | `default` / `narrative` / `both` |
-| `--baseline_context_chars` | `800000` | baseline 截断长度（~186k tokens，~200K 窗口生产场景）|
+| `--baseline_context_tokens` | `240000` | baseline 截断 token 预算（与 token_threshold 同一把尺 `estimate_tokens_text`）；默认给 256K 窗口留余量 |
 | `--keep_recent_pairs` | 缺省 `2` | 尾部保留 chunk 数 |
 | `--max_ingest_chars` | 缺省 `0`（整本）/ 烟雾用 200000 | ingest 截断（0=不截断）|
 | `--skip_baseline` / `--skip_compressed` | 缺省 否 | 跳过某一臂（恢复时用，见 §7）|
@@ -318,13 +318,13 @@ cd /home/feiran/nexent/sdk/benchmark/eventqa_eval
     --question_start 43 \
     --token_threshold 200000 --chunk_chars 100000 \
     --summary_schema narrative \
-    --baseline_context_chars 800000
+    --baseline_context_tokens 200000
 ```
 
 关键：
 - `--skip_compressed` 跳过 ingest + compressed probe（保留 salvage 里已有的 compressed 数据）
 - `--question_start 43` 跳过前 43 题（这是 §7.1 抢救告诉你的 done 数）
-- 其他参数**必须和被中断那次完全一致**——尤其 `--token_threshold` / `--chunk_chars` / `--summary_schema` / `--baseline_context_chars`，否则合并出来的数据不可比
+- 其他参数**必须和被中断那次完全一致**——尤其 `--token_threshold` / `--chunk_chars` / `--summary_schema` / `--baseline_context_tokens`，否则合并出来的数据不可比
 
 写到 `outputs/eventqa_full_book0/{summary.json, predictions.jsonl}`，此时**只含 qid 43..99 的 baseline**（compressed 为空字典）。
 
@@ -404,6 +404,10 @@ OpenAIModel(..., extra_body={"chat_template_kwargs":{"enable_thinking": False}})
 
 经典文学（19 世纪西方小说）会触发部分国内 LLM 端点的内容审核（实测 glm-5 / dashscope 直接 400 `inappropriate content` 拦《乱世佳人》第一个 chunk）。这不是 benchmark 能绕过的——需换无文学审核的端点（DeepSeek 直连、自部署 Qwen3、等）。
 
-### 8.5 baseline_context_chars 与模型窗口的平衡
+### 8.5 baseline_context_tokens 与模型窗口的平衡
 
-`--baseline_context_chars 800000`（约 18.6 万 tokens）已逼近 200K 窗口模型的极限——加上 system prompt + question 容易撞窗口；若模型实际 effective context 短于标称（"lost in the middle"），baseline 准确率会被进一步压低，但这是**该模型在该窗口大小上的真实表现**，是 benchmark 该反映的，不是 bug。
+baseline 臂的截断现在按 **token** 计（`--baseline_context_tokens`），用的是 `estimate_tokens_text`——和 `--token_threshold` 同一把尺，所以两臂的"窗口"在同一刻度上可比。默认 `240000` 给 256K 窗口的模型（如 Qwen36）留出 system prompt + question + answer 的余量。
+
+把它设到接近模型窗口上限即可让 baseline 用满上下文；若模型实际 effective context 短于标称（"lost in the middle"），baseline 准确率会被进一步压低，但这是**该模型在该窗口大小上的真实表现**，是 benchmark 该反映的，不是 bug。
+
+> 注意：`estimate_tokens_text` 是启发式（英文 ≈ chars/4，tiktoken 默认关闭），不是 Qwen 真实分词器。它的价值在于"和 token_threshold 统一"，不是绝对精确的 token 数。

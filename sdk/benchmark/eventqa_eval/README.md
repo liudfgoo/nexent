@@ -111,7 +111,7 @@ baseline 用"截断到模型窗口"作为不压缩对照。
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `--baseline_context_chars` | `480000` | baseline 臂喂给模型的小说字符数（从开头截断）。设成你的模型上下文窗口能容纳的大小。窗口外的事件相关的题目，baseline 会答错——这正是要测的 |
+| `--baseline_context_tokens` | `240000` | baseline 臂喂给模型的小说 token 预算（从开头截断，按 `estimate_tokens_text` 计，与 `--token_threshold` 同一把尺）。设成你的模型上下文窗口能容纳的大小。窗口外的事件相关的题目，baseline 会答错——这正是要测的 |
 
 ### 探针（probe）执行
 

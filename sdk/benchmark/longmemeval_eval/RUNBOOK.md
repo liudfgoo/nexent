@@ -283,3 +283,29 @@ Qwen3 等 thinking 模型在 LongMemEval 上和 EventQA 一样会出问题（见
 输出风格）。做正式对比时单独配 `JUDGE_*` —— LongMemEval 的 6 种 judge prompt
 （每类一份，见 `eval_utils.py`）对判官能力要求不低，建议 GPT-4o / Claude Sonnet
 等外部强模型。
+
+### 7.8 复现/补跑必须对齐**完整** config —— 别从记忆或片段命令拼参数（踩过的坑）
+
+要补跑或重跑某个 dialogue 与其它 dialogue 对比时，**以目标 dialogue 的
+`summary.json` 里的 `config` 块为准，逐字段对齐**，不要凭记忆或截取的命令拼参数。
+非默认参数漏一个就会让结果不可比，而且不会报错。
+
+实测踩坑：补跑 d2/d3/d4 时漏掉了 `--sessions_per_batch 12`（原始跑用的，但当时
+误用了脚本默认 `4`）。后果是连锁的：
+
+- `sessions_per_batch` 决定 ingest 批数 → 压缩轮数。116 session 下 `4` → **29 批**、
+  `12` → **10 批**。
+- 批数越多，增量摘要累积越多：摘要从 d0/d1 的 **~4k token** 暴涨到 **~39k token**（约 10×）。
+- 臃肿摘要稀释信号，`comp_acc` 直接塌（d2 0.25→0.08）—— 看起来像"修了截断 bug 反而变差"，
+  其实是 batching 配错了。
+
+容易被一起漏掉的还有 `--probe_max_tokens 512`（脚本默认现在是 `4096`）。
+
+复现前先 dump 一份参照：
+
+```bash
+python -c "import json; print(json.dumps(json.load(open('outputs/longmemeval_s_star_d0/summary.json'))['config'], indent=2))"
+```
+
+把里面每个字段都映射成对应的 `--flag` 再跑。（同理适用于 eventqa_eval：那边对应的
+关键非默认项是 `--chunk_chars` 和 `--baseline_context_tokens`。）

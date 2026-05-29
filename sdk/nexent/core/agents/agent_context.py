@@ -29,6 +29,21 @@ from ..utils.token_estimation import (
 
 logger = logging.getLogger("agent_context")
 
+# Optional output cap for the compression LLM's summary. Default None = no cap
+# (matches the main agent; never truncates long summaries into cut-off JSON).
+# Set to an int ONLY to bound a slow/stalling endpoint on the heavy compression
+# generation — at the risk of clipping very long summaries.
+COMPRESS_OUTPUT_MAXTOKENS = None
+
+
+def _compress_call_kwargs() -> dict:
+    """kwargs for a compression-summary model call. Caps output only when
+    COMPRESS_OUTPUT_MAXTOKENS is explicitly set; otherwise leaves it unbounded."""
+    kwargs = {"stop_sequences": []}
+    if COMPRESS_OUTPUT_MAXTOKENS is not None:
+        kwargs["max_tokens"] = COMPRESS_OUTPUT_MAXTOKENS
+    return kwargs
+
 
 class OffloadStore:
     """In-memory store for offloaded step content, keyed by UUID handle."""
@@ -204,7 +219,7 @@ def compress_history_offline(
     summary = None
 
     try:
-        response = model(messages, stop_sequences=[])
+        response = model(messages, **_compress_call_kwargs())
         raw_output = response.content
         if isinstance(raw_output, list):
             raw_output = " ".join(
@@ -235,7 +250,7 @@ def compress_history_offline(
                 content=[{"type": "text", "text": user_prompt}],
             )
             try:
-                response = model(messages, stop_sequences=[])
+                response = model(messages, **_compress_call_kwargs())
                 raw_output = response.content
                 if isinstance(raw_output, list):
                     raw_output = " ".join(
@@ -1058,7 +1073,7 @@ class ContextManager:
             ChatMessage(role=MessageRole.USER,
                         content=[{"type": "text", "text": user_prompt}]),
         ]
-        response = model(messages, stop_sequences=[])
+        response = model(messages, **_compress_call_kwargs())
 
         raw_output = response.content
         if isinstance(raw_output, list):
