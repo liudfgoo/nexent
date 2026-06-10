@@ -1337,4 +1337,4 @@ def build_app_context_string(
     Returns:
         Formatted app context string
     """
-    return _format_app_context(app_name, app_description, user_id)
+return _format_app_context(app_name, app_description, user_id)
