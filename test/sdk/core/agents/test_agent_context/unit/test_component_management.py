@@ -21,7 +21,7 @@ for _path in (str(PROJECT_ROOT), str(TEST_ROOT)):
         sys.path.insert(0, _path)
 
 from loader import ContextManager, ContextManagerConfig
-from stubs import _SystemPromptStep
+from stubs import _AgentMemory, _SystemPromptStep, _TaskStep, _ChatMessage, _MessageRole
 
 
 class MockComponent:
@@ -170,6 +170,35 @@ class TestGetRegisteredComponents:
         assert registered[1]._content == "second"
 
 
+class TestRuntimeContextMessages:
+    """Tests for runtime context preservation in compressed message building."""
+
+    def test_build_messages_places_runtime_context_after_system_prompt(self):
+        cm = ContextManager()
+        memory = _AgentMemory(
+            system_prompt=_SystemPromptStep(system_prompt="base system"),
+            steps=[],
+        )
+        runtime_messages = [
+            _ChatMessage(
+                role=_MessageRole.SYSTEM,
+                content=[{"type": "text", "text": "### Session State\n- task_target: report"}],
+            )
+        ]
+        result = cm._build_messages(
+            memory=memory,
+            prev_summary_step=None,
+            prev_tail_steps=[],
+            curr_kept_steps=[_TaskStep(task="current task")],
+            runtime_context_messages=runtime_messages,
+        )
+
+        assert result[0].role == _MessageRole.SYSTEM
+        assert "base system" in result[0].content[0]["text"]
+        assert result[1] is runtime_messages[0]
+        assert result[2].role == _MessageRole.USER
+
+
 class TestGetStrategy:
     """Tests for _get_strategy() method."""
     
@@ -263,7 +292,8 @@ class TestCalculateComponentBudget:
             cm.config.component_budgets["memory"] +
             cm.config.component_budgets["knowledge_base"] +
             cm.config.component_budgets["managed_agents"] +
-            cm.config.component_budgets["external_a2a_agents"]
+            cm.config.component_budgets["external_a2a_agents"] +
+            cm.config.component_budgets["working_memory"]
         )
         assert budget == expected
 

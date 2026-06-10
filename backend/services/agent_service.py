@@ -11,6 +11,7 @@ from typing import Callable, Optional, Dict, List
 
 from fastapi import Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from nexent.core.agents.agent_model import AgentRunContext, ToolConfig
 from nexent.core.agents.run_agent import agent_run
 from nexent.memory.memory_service import clear_memory, add_memory_in_levels
 from jinja2 import Template
@@ -21,8 +22,9 @@ from agents.preprocess_manager import preprocess_manager
 from services.agent_version_service import publish_version_impl
 from utils.prompt_template_utils import normalize_prompt_generate_template_content
 from consts.const import MEMORY_SEARCH_START_MSG, MEMORY_SEARCH_DONE_MSG, MEMORY_SEARCH_FAIL_MSG, TOOL_TYPE_MAPPING, \
-    LANGUAGE, MESSAGE_ROLE, MODEL_CONFIG_MAPPING, CAN_EDIT_ALL_USER_ROLES, PERMISSION_EDIT, PERMISSION_READ, PERMISSION_PRIVATE
-from consts.exceptions import AppException, MemoryPreparationException, SkillDuplicateError
+    LANGUAGE, MESSAGE_ROLE, MODEL_CONFIG_MAPPING, CAN_EDIT_ALL_USER_ROLES, PERMISSION_EDIT, PERMISSION_READ, PERMISSION_PRIVATE, \
+    WORKING_MEMORY_ENABLED
+from consts.exceptions import AppException, MemoryPreparationException, SkillDuplicateError, WorkingMemoryError
 from consts.error_code import ErrorCode
 from consts.agent_unavailable_reasons import AgentUnavailableReason
 from consts.model import (
@@ -86,6 +88,7 @@ from services.memory_config_service import build_memory_context
 from utils.auth_utils import get_current_user_info, get_user_language
 from utils.config_utils import tenant_config_manager
 from utils.memory_utils import build_memory_config
+from utils.context_utils import build_runtime_context_components
 from utils.thread_utils import submit
 from utils.prompt_template_utils import get_prompt_generate_prompt_template
 from utils.llm_utils import call_llm_for_system_prompt
@@ -95,6 +98,7 @@ from nexent.monitor import AgentRunMetadata, agent_monitoring_context
 
 # Import monitoring utilities
 from utils.monitoring import monitoring_manager
+from services import working_memory_service
 
 logger = logging.getLogger(__name__)
 SAFE_AGENT_STREAM_ERROR_MESSAGE = "Agent execution failed. Please try again later."
@@ -932,6 +936,45 @@ async def _stream_agent_chunks(
                 logger.error(
                     f"Unexpected error during background memory addition: {bg_e}")
 
+        async def _append_working_memory_background():
+            try:
+                run_context = getattr(agent_run_info, "run_context", None)
+                conversation_id = getattr(run_context, "conversation_id", None)
+                final_answer_local = captured_final_answer
+                if (
+                    not run_context
+                    or not getattr(run_context, "working_memory_enabled", False)
+                    or not conversation_id
+                    or not final_answer_local
+                ):
+                    return
+                await asyncio.to_thread(
+                    working_memory_service.append_message,
+                    run_context.tenant_id,
+                    run_context.user_id,
+                    conversation_id,
+                    MESSAGE_ROLE["USER"],
+                    agent_run_info.query,
+                    memory_ctx.agent_id,
+                )
+                await asyncio.to_thread(
+                    working_memory_service.append_message,
+                    run_context.tenant_id,
+                    run_context.user_id,
+                    conversation_id,
+                    MESSAGE_ROLE["ASSISTANT"],
+                    final_answer_local,
+                    memory_ctx.agent_id,
+                )
+                await asyncio.to_thread(
+                    working_memory_service.maybe_snapshot,
+                    run_context.tenant_id,
+                    run_context.user_id,
+                    conversation_id,
+                )
+            except Exception as wm_e:
+                logger.warning(f"Working memory append failed (non-fatal): {wm_e}")
+
         try:
             # Create and store the background task to avoid warnings
             background_task = asyncio.create_task(_add_memory_background())
@@ -941,6 +984,14 @@ async def _stream_agent_chunks(
         except Exception as schedule_err:
             logger.error(
                 f"Failed to schedule background memory addition: {schedule_err}")
+
+        try:
+            wm_task = asyncio.create_task(_append_working_memory_background())
+            wm_task.add_done_callback(
+                lambda t: t.exception() if t.exception() else None)
+        except Exception as schedule_err:
+            logger.error(
+                f"Failed to schedule working memory append: {schedule_err}")
 
 
 def get_enable_tool_id_by_agent_id(agent_id: int, tenant_id: str):
@@ -2020,6 +2071,121 @@ def insert_related_agent_impl(parent_agent_id, child_agent_id, tenant_id):
         )
 
 
+def _agent_working_memory_enabled(agent_request: AgentRequest, tenant_id: str) -> bool:
+    if not WORKING_MEMORY_ENABLED or not getattr(agent_request, "conversation_id", None):
+        return False
+    try:
+        agent_info = search_agent_info_by_agent_id(
+            agent_id=agent_request.agent_id,
+            tenant_id=tenant_id,
+            version_no=agent_request.version_no or 0,
+        )
+        if isinstance(agent_info, dict):
+            return agent_info.get("enable_working_memory", True)
+    except Exception as e:
+        logger.warning(f"Failed to read enable_working_memory flag, defaulting to enabled: {e}")
+    return True
+
+
+async def build_agent_run_context(
+    agent_request: AgentRequest,
+    tenant_id: str,
+    user_id: str,
+    enabled: bool,
+) -> AgentRunContext:
+    conversation_id = str(agent_request.conversation_id) if agent_request.conversation_id else None
+    working_memory_kv = {}
+    if enabled and conversation_id:
+        working_memory_kv = await working_memory_service.get_kv(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+    return AgentRunContext(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        root_agent_id=str(agent_request.agent_id),
+        working_memory_enabled=enabled,
+        working_memory_kv=working_memory_kv,
+    )
+
+
+def _make_set_state_cb(ctx: AgentRunContext, agent_id: str):
+    def cb(key: str, value: str):
+        if not ctx.conversation_id:
+            raise WorkingMemoryError("Working memory requires conversation_id")
+        return working_memory_service.set_kv_sync(
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            conversation_id=ctx.conversation_id,
+            key=key,
+            value=value,
+            agent_id=agent_id,
+        )
+    return cb
+
+
+def _make_delete_state_cb(ctx: AgentRunContext, agent_id: str):
+    def cb(key: str):
+        if not ctx.conversation_id:
+            raise WorkingMemoryError("Working memory requires conversation_id")
+        return working_memory_service.delete_kv_sync(
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            conversation_id=ctx.conversation_id,
+            key=key,
+            agent_id=agent_id,
+        )
+    return cb
+
+
+def bind_working_memory_tools(agent_config, run_context: AgentRunContext, enabled: bool) -> None:
+    if not enabled or not run_context or not run_context.conversation_id:
+        return
+
+    agent_id = getattr(agent_config, "name", None) or run_context.root_agent_id
+    agent_config.tools = [
+        tool for tool in agent_config.tools
+        if tool.class_name not in ("SetStateTool", "DeleteStateTool")
+    ]
+    agent_config.tools.extend([
+        ToolConfig(
+            class_name="SetStateTool",
+            name="set_state",
+            description=(
+                "Save a session-scoped key-value fact in working memory. "
+                "Use for current conversation goals, constraints, decisions, and in-progress state."
+            ),
+            inputs=json.dumps({
+                "key": {"type": "string", "description": "snake_case key"},
+                "value": {"type": "string", "description": "String value"},
+            }, ensure_ascii=False),
+            output_type="string",
+            params={},
+            source="local",
+            usage=None,
+            metadata={"set_callback": _make_set_state_cb(run_context, str(agent_id))},
+        ),
+        ToolConfig(
+            class_name="DeleteStateTool",
+            name="delete_state",
+            description="Delete an obsolete or incorrect session-scoped working memory key.",
+            inputs=json.dumps({
+                "key": {"type": "string", "description": "snake_case key to delete"},
+            }, ensure_ascii=False),
+            output_type="string",
+            params={},
+            source="local",
+            usage=None,
+            metadata={"delete_callback": _make_delete_state_cb(run_context, str(agent_id))},
+        ),
+    ])
+
+    for managed_agent in getattr(agent_config, "managed_agents", []) or []:
+        bind_working_memory_tools(managed_agent, run_context, enabled)
+
+
 # Helper function for run_agent_stream, used to prepare context for an agent run
 async def prepare_agent_run(
     agent_request: AgentRequest,
@@ -2034,6 +2200,13 @@ async def prepare_agent_run(
 
     memory_context = build_memory_context(
         user_id, tenant_id, agent_request.agent_id, skip_query=not allow_memory_search)
+    working_memory_enabled = _agent_working_memory_enabled(agent_request, tenant_id)
+    run_context = await build_agent_run_context(
+        agent_request=agent_request,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        enabled=working_memory_enabled,
+    )
     agent_run_info = await create_agent_run_info(
         agent_id=agent_request.agent_id,
         minio_files=agent_request.minio_files,
@@ -2046,6 +2219,16 @@ async def prepare_agent_run(
         is_debug=agent_request.is_debug,
         override_version_no=agent_request.version_no,
         override_model_id=agent_request.model_id,
+    )
+    agent_run_info.run_context = run_context
+    agent_run_info.runtime_context_components = build_runtime_context_components(
+        run_context,
+        language=language,
+    ) if working_memory_enabled else []
+    bind_working_memory_tools(
+        agent_run_info.agent_config,
+        run_context,
+        enabled=working_memory_enabled,
     )
 
     # Mount conversation-level reusable ContextManager if enabled

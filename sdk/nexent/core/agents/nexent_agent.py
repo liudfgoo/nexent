@@ -9,6 +9,7 @@ from threading import Event
 from typing import Any, Callable, Dict, List
 
 from smolagents import ActionStep, AgentText, TaskStep, Timing
+from smolagents.models import ChatMessage
 from smolagents.tools import Tool
 
 from ...monitor import AgentRunMetadata, get_agent_monitoring_context, get_monitoring_manager
@@ -264,6 +265,14 @@ extra_body=model_config.extra_body,
                     "agent_id", "") if tool_config.metadata else ""
                 tools_obj.memory_user_config = tool_config.metadata.get(
                     "memory_user_config", None) if tool_config.metadata else None
+            elif class_name == "SetStateTool":
+                tools_obj = tool_class()
+                tools_obj.set_callback = tool_config.metadata.get(
+                    "set_callback", None) if tool_config.metadata else None
+            elif class_name == "DeleteStateTool":
+                tools_obj = tool_class()
+                tools_obj.delete_callback = tool_config.metadata.get(
+                    "delete_callback", None) if tool_config.metadata else None
             else:
                 tools_obj = tool_class(**params)
                 if hasattr(tools_obj, 'observer'):
@@ -369,7 +378,7 @@ extra_body=model_config.extra_body,
         except Exception as e:
             raise ValueError(f"Error in creating tool: {e}")
 
-    def create_single_agent(self, agent_config: AgentConfig):
+    def create_single_agent(self, agent_config: AgentConfig, runtime_context_components: List[Any] = None):
         if not isinstance(agent_config, AgentConfig):
             raise TypeError("agent_config must be a AgentConfig object")
 
@@ -391,7 +400,10 @@ extra_body=model_config.extra_body,
             try:
                 # Create internal managed agents recursively
                 managed_agents_list = [
-                    self.create_single_agent(sub_agent_config)
+                    self.create_single_agent(
+                        sub_agent_config,
+                        runtime_context_components=runtime_context_components,
+                    )
                     for sub_agent_config in agent_config.managed_agents
                 ]
             except Exception as e:
@@ -428,6 +440,15 @@ extra_body=model_config.extra_body,
                 instructions=agent_config.instructions,
             )
             agent.stop_event = self.stop_event
+
+            runtime_messages = []
+            for component in runtime_context_components or []:
+                for message in component.to_messages():
+                    if isinstance(message, ChatMessage):
+                        runtime_messages.append(message)
+                    else:
+                        runtime_messages.append(ChatMessage.from_dict(message))
+            agent.runtime_context_messages = runtime_messages
 
             # Mount context manager if config provided and enabled
             ctx_config = getattr(agent_config, 'context_manager_config', None)

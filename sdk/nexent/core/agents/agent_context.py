@@ -451,7 +451,12 @@ class ContextManager:
     # ============================================================
 
     def compress_if_needed(
-        self, model, memory, original_messages: List[ChatMessage], current_run_start_idx,
+        self,
+        model,
+        memory,
+        original_messages: List[ChatMessage],
+        current_run_start_idx,
+        runtime_context_messages: Optional[List[ChatMessage]] = None,
     ) -> List[ChatMessage]:
         # G1
         if not self.config.enabled:
@@ -516,7 +521,11 @@ class ContextManager:
                 self._step_local_log.append(record)
 
                 compressed_msgs = self._build_messages(
-                    memory, prev_summary_step, prev_tail_steps, curr_kept_steps
+                    memory,
+                    prev_summary_step,
+                    prev_tail_steps,
+                    curr_kept_steps,
+                    runtime_context_messages=runtime_context_messages,
                 )
                 self._last_uncompressed_token_count = self._msg_token_count(original_messages)
                 self._last_compressed_token_count = self._msg_token_count(compressed_msgs)
@@ -620,7 +629,11 @@ class ContextManager:
                         )
 
             final_messages = self._build_messages(
-                memory, prev_summary_step, prev_tail_steps, curr_kept_steps
+                memory,
+                prev_summary_step,
+                prev_tail_steps,
+                curr_kept_steps,
+                runtime_context_messages=runtime_context_messages,
             )
             final_tokens = self._msg_token_count(final_messages)
             self._last_compressed_token_count = final_tokens
@@ -1158,10 +1171,13 @@ class ContextManager:
         prev_summary_step: Optional[SummaryTaskStep],
         prev_tail_steps: List[MemoryStep],
         curr_kept_steps: List[MemoryStep],
+        runtime_context_messages: Optional[List[ChatMessage]] = None,
     ) -> List[ChatMessage]:
         result = []
         if memory.system_prompt:
             result.extend(memory.system_prompt.to_messages())
+        if runtime_context_messages:
+            result.extend(runtime_context_messages)
         if prev_summary_step:
             result.extend(prev_summary_step.to_messages())
         for step in prev_tail_steps:
@@ -1217,7 +1233,11 @@ class ContextManager:
     # ============================================================
 
     def build_compressed_snapshot(
-        self, model, memory: AgentMemory, current_run_start_idx: int,
+        self,
+        model,
+        memory: AgentMemory,
+        current_run_start_idx: int,
+        runtime_context_messages: Optional[List[ChatMessage]] = None,
     ) -> Tuple[List[ChatMessage], dict]:
         """Build a frozen compressed message snapshot for probe evaluation.
 
@@ -1234,11 +1254,17 @@ class ContextManager:
 
         try:
             original_messages = memory.system_prompt.to_messages() if memory.system_prompt else []
+            if runtime_context_messages:
+                original_messages.extend(runtime_context_messages)
             for step in memory.steps:
                 original_messages.extend(step.to_messages())
 
             compressed_messages = self.compress_if_needed(
-                model, memory, original_messages, current_run_start_idx
+                model,
+                memory,
+                original_messages,
+                current_run_start_idx,
+                runtime_context_messages=runtime_context_messages,
             )
 
             metadata = {

@@ -1,9 +1,10 @@
 import logging
 import threading
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 
 from nexent.core.agents.agent_model import AgentRunInfo
 from nexent.core.agents.agent_context import ContextManager, ContextManagerConfig
+from services import working_memory_service
 
 logger = logging.getLogger("agent_run_manager")
 
@@ -92,7 +93,12 @@ class AgentRunManager:
                     f"Created new ContextManager for conversation_id: {conv_key}")
             return cm
 
-    def clear_conversation_context_manager(self, conversation_id: Union[int, str]):
+    def clear_conversation_context_manager(
+        self,
+        conversation_id: Union[int, str],
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ):
         """Explicitly clear the ContextManager for a conversation."""
         conv_key = str(conversation_id)
         with self._lock:
@@ -101,6 +107,11 @@ class AgentRunManager:
             if cm:
                 logger.info(
                     f"Cleared ContextManager for conversation_id: {conv_key}")
+        if tenant_id and user_id:
+            try:
+                working_memory_service.finalize(tenant_id, user_id, conv_key)
+            except Exception as e:
+                logger.warning(f"Failed to finalize working memory for conversation_id={conv_key}: {e}")
 
 
 # create singleton instance

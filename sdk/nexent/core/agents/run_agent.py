@@ -83,7 +83,10 @@ def agent_run_thread(agent_run_info: AgentRunInfo):
                 model_config_list=agent_run_info.model_config_list,
                 stop_event=agent_run_info.stop_event
             )
-            agent = nexent.create_single_agent(agent_run_info.agent_config)
+            agent = nexent.create_single_agent(
+                agent_run_info.agent_config,
+                runtime_context_components=getattr(agent_run_info, "runtime_context_components", None),
+            )
             nexent.set_agent(agent)
 
             if getattr(agent_run_info, 'context_manager', None) is not None:
@@ -106,7 +109,10 @@ def agent_run_thread(agent_run_info: AgentRunInfo):
                     stop_event=agent_run_info.stop_event,
                     mcp_tool_collection=tool_collection
                 )
-                agent = nexent.create_single_agent(agent_run_info.agent_config)
+                agent = nexent.create_single_agent(
+                    agent_run_info.agent_config,
+                    runtime_context_components=getattr(agent_run_info, "runtime_context_components", None),
+                )
                 nexent.set_agent(agent)
 
                 if getattr(agent_run_info, 'context_manager', None) is not None:

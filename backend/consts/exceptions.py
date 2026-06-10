@@ -107,6 +107,12 @@ class MemoryPreparationException(Exception):
     pass
 
 
+class WorkingMemoryError(Exception):
+    """Raised when Working Memory backend operations fail unrecoverably."""
+
+    pass
+
+
 class MCPConnectionError(Exception):
     """Raised when MCP connection fails."""
 

@@ -358,7 +358,7 @@ def rename_conversation_service(conversation_id: int, name: str, user_id: str) -
         raise Exception(str(e))
 
 
-def delete_conversation_service(conversation_id: int, user_id: str) -> bool:
+def delete_conversation_service(conversation_id: int, user_id: str, tenant_id: str = None) -> bool:
     """
     Delete specified conversation
 
@@ -376,7 +376,11 @@ def delete_conversation_service(conversation_id: int, user_id: str) -> bool:
 
         # Defensive cleanup: release the ContextManager associated with this conversation
         # to avoid memory leaks in edge cases
-        agent_run_manager.clear_conversation_context_manager(conversation_id)
+        agent_run_manager.clear_conversation_context_manager(
+            conversation_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
 
         return True
     except Exception as e:

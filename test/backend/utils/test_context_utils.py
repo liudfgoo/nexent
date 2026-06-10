@@ -157,6 +157,27 @@ class TestBuildComponents:
         comp = build_system_prompt_component("test", template_name="template.yaml")
         assert comp.template_name == "template.yaml"
 
+    def test_build_runtime_context_components_with_working_memory(self):
+        from backend.utils.context_utils import build_runtime_context_components
+        from nexent.core.agents.agent_model import AgentRunContext
+
+        ctx = AgentRunContext(
+            tenant_id="tenant",
+            user_id="user",
+            conversation_id="conv",
+            root_agent_id="agent",
+            working_memory_enabled=True,
+            working_memory_kv={"task_target": "prepare report"},
+        )
+        components = build_runtime_context_components(ctx, language="zh")
+
+        assert len(components) == 1
+        assert components[0].component_type == "working_memory"
+        messages = components[0].to_messages()
+        assert messages[0]["role"] == "system"
+        assert "### Session State" in messages[0]["content"]
+        assert "task_target: prepare report" in messages[0]["content"]
+
 
 class TestBuildContextComponents:
     def test_empty_inputs_produces_skeleton(self):

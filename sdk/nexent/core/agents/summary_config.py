@@ -99,6 +99,9 @@ class ContextManagerConfig:
     inject_app_context: bool = True
     """Whether to inject APP_NAME, APP_DESCRIPTION, time, user_id."""
 
+    inject_working_memory: bool = True
+    """Whether to inject per-run working memory as runtime context messages."""
+
     # === NEW: Per-Component Token Budgets ===
     component_budgets: Dict[str, int] = field(default_factory=lambda: {
         "system_prompt": 4000,
@@ -108,6 +111,7 @@ class ContextManagerConfig:
         "knowledge_base": 1500,
         "managed_agents": 500,
         "external_a2a_agents": 500,
+        "working_memory": 500,
         "conversation_history": 4000,  # Reserved for conversation compression
     })
     """Token budget for each context component type.

@@ -127,6 +127,14 @@ class AgentRunInfo(BaseModel):
                     "If provided, it will be attached to the CoreAgent instead of creating a new one.",
         default=None
     )
+    run_context: Optional[Any] = Field(
+        description="Per-run runtime context such as conversation-scoped working memory",
+        default=None
+    )
+    runtime_context_components: List[Any] = Field(
+        description="Per-run context components inserted after system prompt and before history",
+        default_factory=list
+    )
 
     class Config:
         arbitrary_types_allowed = True
@@ -233,7 +241,16 @@ class ExternalA2AAgentConfig(BaseModel):
 # Context Component System - Building blocks for system prompt assembly
 # =============================================================================
 
-ComponentType = Literal["system_prompt", "tools", "skills", "memory", "knowledge_base", "managed_agents", "external_a2a_agents"]
+ComponentType = Literal[
+    "system_prompt",
+    "tools",
+    "skills",
+    "memory",
+    "knowledge_base",
+    "managed_agents",
+    "external_a2a_agents",
+    "working_memory",
+]
 
 
 class ContextComponent(BaseModel, ABC):
@@ -391,6 +408,35 @@ class ExternalAgentsComponent(ContextComponent):
             "description": description,
             "url": url
         })
+
+
+class WorkingMemoryComponent(ContextComponent):
+    """Runtime working memory component for conversation-scoped session facts."""
+    component_type: ComponentType = Field(default="working_memory")
+    kv: Dict[str, str] = Field(description="Conversation-scoped key-value state", default_factory=dict)
+    formatted_content: str = Field(description="Pre-formatted working memory text", default="")
+    priority: int = Field(description="Selection priority", default=95)
+
+    def to_messages(self) -> List[Dict[str, str]]:
+        if self.formatted_content:
+            return [{"role": "system", "content": self.formatted_content}]
+        return []
+
+
+class AgentRunContext(BaseModel):
+    """Per-run context that is scoped to the current conversation/request."""
+    tenant_id: str = Field(description="Tenant id")
+    user_id: str = Field(description="User id")
+    conversation_id: Optional[str] = Field(description="Conversation id", default=None)
+    root_agent_id: str = Field(description="Root agent id")
+    working_memory_enabled: bool = Field(
+        description="Whether Working Memory is enabled for this run",
+        default=True
+    )
+    working_memory_kv: Dict[str, str] = Field(
+        description="Working memory KV snapshot loaded at run start",
+        default_factory=dict
+    )
 
 
 # =============================================================================

@@ -219,6 +219,7 @@ class CoreAgent(CodeAgent):
         self.stop_event = threading.Event()
         self._history_step_count = 0  # For ContextManager, record boundary for compression
         self.context_manager: ContextManager = None
+        self.runtime_context_messages: List[ChatMessage] = []
         self.step_metrics: List[dict] = []  # Quantitative metrics per step
         self._last_uncompressed_est = 0
         # Override smolagent default to prevent extracting ```python blocks from KB content.
@@ -226,6 +227,22 @@ class CoreAgent(CodeAgent):
         # tags (e.g., ``` and ```). extract_code_from_text iterates all tags as language
         # identifiers; omitting "python" and "py" ensures ```python blocks are not extracted.
         self.code_block_tags = ["", ""]
+
+    def write_memory_to_messages(self, summary_mode: bool = False) -> List[ChatMessage]:
+        """Build model messages with runtime context after the system prompt.
+
+        Runtime context is per-run state such as Working Memory. It deliberately
+        stays outside ``memory.system_prompt`` so stable prompt prefixes can be
+        cached and compression summaries do not absorb the runtime state.
+        """
+        messages: List[ChatMessage] = []
+        if self.memory.system_prompt:
+            messages.extend(self.memory.system_prompt.to_messages())
+        if self.runtime_context_messages:
+            messages.extend(self.runtime_context_messages)
+        for memory_step in self.memory.steps:
+            messages.extend(memory_step.to_messages(summary_mode=summary_mode))
+        return messages
 
     def _log_model_call_parameters(self, input_messages: List[ChatMessage], stop_sequences: List[str], additional_args: Dict[str, Any]) -> None:
         """
@@ -306,7 +323,11 @@ Additional Args:
         # Trigger context compression if needed before building messages
         if self.context_manager and self.context_manager.config.enabled:
             input_messages = self.context_manager.compress_if_needed(
-                self.model, self.memory, input_messages, self._history_step_count
+                self.model,
+                self.memory,
+                input_messages,
+                self._history_step_count,
+                runtime_context_messages=self.runtime_context_messages,
             )
         # Add new step in logs
         memory_step.model_input_messages = input_messages

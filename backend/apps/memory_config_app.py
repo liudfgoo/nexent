@@ -40,7 +40,7 @@ from consts.const import (
     BOOLEAN_TRUE_VALUES,
 )
 from consts.model import MemoryAgentShareMode
-from consts.exceptions import UnauthorizedError
+from consts.exceptions import UnauthorizedError, WorkingMemoryError
 from services.memory_config_service import (
     add_disabled_agent_id,
     add_disabled_useragent_id,
@@ -50,6 +50,7 @@ from services.memory_config_service import (
     set_agent_share,
     set_memory_switch,
 )
+from services import working_memory_service
 from utils.auth_utils import get_current_user_id
 from utils.memory_utils import build_memory_config
 
@@ -78,6 +79,25 @@ def load_configs(authorization: Optional[str] = Header(None)):
         logger.error("load_configs failed: %s", e)
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST,
                             detail="Failed to load configuration")
+
+
+@router.get("/working_memory/{conversation_id}")
+def dump_working_memory(
+    conversation_id: str = Path(..., description="Conversation id"),
+    authorization: Optional[str] = Header(None),
+):
+    """Dump working memory state for debugging."""
+    try:
+        user_id, tenant_id = get_current_user_id(authorization)
+        result = working_memory_service.dump(tenant_id, user_id, conversation_id)
+        return JSONResponse(status_code=HTTPStatus.OK, content=result)
+    except UnauthorizedError as e:
+        raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail=str(e))
+    except WorkingMemoryError as e:
+        raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=str(e))
+    except Exception as e:
+        logger.error("dump_working_memory failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(e))
 
 
 @router.post("/config/set")

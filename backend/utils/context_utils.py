@@ -1322,6 +1322,61 @@ def build_context_components(
     return components
 
 
+def _format_working_memory(kv: Dict[str, str], language: str = "zh") -> str:
+    """Format working memory KV as a runtime context block."""
+    if not kv:
+        return ""
+
+    lines = [
+        "### Session State",
+        "Authoritative session facts. When these conflict with conversational mentions in the history, prefer Session State.",
+        "",
+    ]
+    lines.extend(f"- {key}: {value}" for key, value in kv.items())
+    return "\n".join(lines)
+
+
+def build_working_memory_component(
+    kv: Dict[str, str],
+    language: str = "zh",
+    priority: int = 95,
+) -> Optional["ContextComponent"]:
+    """Build WorkingMemoryComponent from a run-start KV snapshot."""
+    if not kv:
+        return None
+
+    from nexent.core.agents.agent_model import WorkingMemoryComponent
+
+    formatted_content = _format_working_memory(kv, language=language)
+    if not formatted_content:
+        return None
+    return WorkingMemoryComponent(
+        kv=kv,
+        formatted_content=formatted_content,
+        priority=priority,
+    )
+
+
+def build_runtime_context_components(
+    run_context: Any,
+    language: str = "zh",
+) -> List["ContextComponent"]:
+    """Build per-run runtime context components.
+
+    These components are not part of agent_config.context_components and must
+    not be registered into ContextManager.build_system_prompt().
+    """
+    components: List["ContextComponent"] = []
+    if not run_context:
+        return components
+
+    working_memory_kv = getattr(run_context, "working_memory_kv", None) or {}
+    component = build_working_memory_component(working_memory_kv, language=language)
+    if component:
+        components.append(component)
+    return components
+
+
 def build_app_context_string(
     app_name: str,
     app_description: str,
@@ -1337,4 +1392,4 @@ def build_app_context_string(
     Returns:
         Formatted app context string
     """
-return _format_app_context(app_name, app_description, user_id)
+    return _format_app_context(app_name, app_description, user_id)
