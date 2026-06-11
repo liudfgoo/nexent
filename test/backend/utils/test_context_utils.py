@@ -175,8 +175,9 @@ class TestBuildComponents:
         assert components[0].component_type == "working_memory"
         messages = components[0].to_messages()
         assert messages[0]["role"] == "system"
-        assert "### Session State" in messages[0]["content"]
-        assert "task_target: prepare report" in messages[0]["content"]
+        assert messages[0]["content"][0]["type"] == "text"
+        assert "### Session State" in messages[0]["content"][0]["text"]
+        assert "task_target: prepare report" in messages[0]["content"][0]["text"]
 
 
 class TestBuildContextComponents:

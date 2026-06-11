@@ -419,7 +419,10 @@ class WorkingMemoryComponent(ContextComponent):
 
     def to_messages(self) -> List[Dict[str, str]]:
         if self.formatted_content:
-            return [{"role": "system", "content": self.formatted_content}]
+            return [{
+                "role": "system",
+                "content": [{"type": "text", "text": self.formatted_content}],
+            }]
         return []
 
 
