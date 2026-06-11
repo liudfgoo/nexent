@@ -334,6 +334,27 @@ def _format_tools_description(
             lines.append("- knowledge_base_search tool can only use the following knowledge base indexes, please select the most relevant one or more knowledge base indexes based on the user's question:")
             lines.append(f" {knowledge_base_summary}")
 
+    has_set_state = any(
+        name == "set_state" or getattr(tool, "name", None) == "set_state" or (
+            isinstance(tool, dict) and tool.get("name") == "set_state"
+        )
+        for name, tool in tools.items()
+    )
+    if has_set_state:
+        lines.append("")
+        if language == "zh":
+            lines.append("### 工作记忆使用规则")
+            lines.append("- 当用户提供或更正当前会话内后续需要遵守的目标、约束、角色、偏好、决策、任务进展时，先调用 `set_state` 保存或更新，再继续回答。")
+            lines.append("- 当用户说明之前的临时目标、约束、决策或状态已经作废时，调用 `delete_state` 删除，或用 `set_state` 覆盖为最新值。")
+            lines.append("- `set_state` 用于当前会话短期状态；`store_memory` 只用于跨会话长期事实。不要用长期记忆替代当前会话工作记忆。")
+            lines.append("- 如果长期记忆与当前会话工作记忆或用户最新表述冲突，优先遵守当前会话状态和用户最新表述。")
+        else:
+            lines.append("### Working Memory Rules")
+            lines.append("- When the user provides or corrects a goal, constraint, role, preference, decision, or task progress that should guide later turns in this conversation, call `set_state` before continuing the answer.")
+            lines.append("- When the user says a previous temporary goal, constraint, decision, or state is obsolete, call `delete_state` or overwrite it with `set_state`.")
+            lines.append("- Use `set_state` for current-session short-lived state; use `store_memory` only for long-term cross-conversation facts. Do not use long-term memory as a substitute for working memory.")
+            lines.append("- If long-term memory conflicts with current-session working memory or the user's latest statement, follow the current-session state and latest statement.")
+
     # File URL usage guide
     lines.append("")
     if language == "zh":

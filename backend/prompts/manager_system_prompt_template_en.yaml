@@ -112,6 +112,14 @@ system_prompt: |-
      - knowledge_base_search tool can only use the following knowledge base indexes, please select the most relevant one or more knowledge base indexes based on the user's question:
       {{ knowledge_base_summary }}
      {%- endif %}
+     {%- if tools.get('set_state') %}
+
+     ### Working Memory Rules
+     - When the user provides or corrects a goal, constraint, role, preference, decision, or task progress that should guide later turns in this conversation, call `set_state` before continuing the answer.
+     - When the user says a previous temporary goal, constraint, decision, or state is obsolete, call `delete_state` or overwrite it with `set_state`.
+     - Use `set_state` for current-session short-lived state; use `store_memory` only for long-term cross-conversation facts. Do not use long-term memory as a substitute for working memory.
+     - If long-term memory conflicts with current-session working memory or the user's latest statement, follow the current-session state and latest statement.
+     {%- endif %}
 
      ### File URL Usage Guide
      When processing user-uploaded files, choose the correct URL based on tool type:

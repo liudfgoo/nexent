@@ -305,6 +305,34 @@ ValidationError = sys.modules["consts.exceptions"].ValidationError
 from consts.const import MODEL_CONFIG_MAPPING
 
 
+def test_get_working_memory_tool_configs_builds_session_state_tools(monkeypatch):
+    class DummyToolConfig:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    monkeypatch.setattr(create_agent_info_module, "ToolConfig", DummyToolConfig)
+    seen_agent_ids = []
+
+    def metadata_factory(agent_id):
+        seen_agent_ids.append(agent_id)
+        return {
+            "set_callback": "set-callback",
+            "delete_callback": "delete-callback",
+        }
+
+    tools = create_agent_info_module._get_working_memory_tool_configs(
+        "planner_agent",
+        metadata_factory,
+    )
+
+    assert seen_agent_ids == ["planner_agent"]
+    assert [tool.name for tool in tools] == ["set_state", "delete_state"]
+    assert tools[0].metadata == {"set_callback": "set-callback"}
+    assert tools[1].metadata == {"delete_callback": "delete-callback"}
+    assert "current conversation working memory" in tools[0].description
+    assert "temporary facts" in tools[0].description
+
+
 class TestGetSkillsForTemplate:
     """Tests for the _get_skills_for_template function"""
 

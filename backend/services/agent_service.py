@@ -2081,7 +2081,15 @@ def _agent_working_memory_enabled(agent_request: AgentRequest, tenant_id: str) -
             version_no=agent_request.version_no or 0,
         )
         if isinstance(agent_info, dict):
-            return agent_info.get("enable_working_memory", True)
+            enabled = agent_info.get("enable_working_memory")
+            if enabled is False:
+                logger.info(
+                    "Working memory disabled by agent config: agent_id=%s, version_no=%s",
+                    agent_request.agent_id,
+                    agent_request.version_no or 0,
+                )
+                return False
+            return True
     except Exception as e:
         logger.warning(f"Failed to read enable_working_memory flag, defaulting to enabled: {e}")
     return True
@@ -2140,6 +2148,15 @@ def _make_delete_state_cb(ctx: AgentRunContext, agent_id: str):
     return cb
 
 
+def _make_working_memory_tool_metadata_factory(ctx: AgentRunContext):
+    def factory(agent_id: str):
+        return {
+            "set_callback": _make_set_state_cb(ctx, str(agent_id)),
+            "delete_callback": _make_delete_state_cb(ctx, str(agent_id)),
+        }
+    return factory
+
+
 def bind_working_memory_tools(agent_config, run_context: AgentRunContext, enabled: bool) -> None:
     if not enabled or not run_context or not run_context.conversation_id:
         return
@@ -2154,12 +2171,15 @@ def bind_working_memory_tools(agent_config, run_context: AgentRunContext, enable
             class_name="SetStateTool",
             name="set_state",
             description=(
-                "Save a session-scoped key-value fact in working memory. "
-                "Use for current conversation goals, constraints, decisions, and in-progress state."
+                "Save or update a short-lived fact in current conversation working memory. "
+                "Use immediately when the user provides session-scoped goals, constraints, "
+                "roles, decisions, task progress, or corrections that should guide later turns. "
+                "Use this instead of store_memory for temporary facts that should not persist "
+                "across conversations."
             ),
             inputs=json.dumps({
-                "key": {"type": "string", "description": "snake_case key"},
-                "value": {"type": "string", "description": "String value"},
+                "key": {"type": "string", "description": "snake_case key, e.g. task_target or constraints"},
+                "value": {"type": "string", "description": "Current value to keep for this conversation"},
             }, ensure_ascii=False),
             output_type="string",
             params={},
@@ -2170,7 +2190,11 @@ def bind_working_memory_tools(agent_config, run_context: AgentRunContext, enable
         ToolConfig(
             class_name="DeleteStateTool",
             name="delete_state",
-            description="Delete an obsolete or incorrect session-scoped working memory key.",
+            description=(
+                "Delete an obsolete or incorrect short-lived working memory key for the "
+                "current conversation. Use when the user says a prior goal, constraint, "
+                "decision, or temporary fact is no longer valid."
+            ),
             inputs=json.dumps({
                 "key": {"type": "string", "description": "snake_case key to delete"},
             }, ensure_ascii=False),
@@ -2207,6 +2231,13 @@ async def prepare_agent_run(
         user_id=user_id,
         enabled=working_memory_enabled,
     )
+    logger.info(
+        "Working memory run setup: enabled=%s, agent_id=%s, conversation_id=%s, allow_memory_search=%s",
+        working_memory_enabled,
+        agent_request.agent_id,
+        agent_request.conversation_id,
+        allow_memory_search,
+    )
     agent_run_info = await create_agent_run_info(
         agent_id=agent_request.agent_id,
         minio_files=agent_request.minio_files,
@@ -2219,6 +2250,11 @@ async def prepare_agent_run(
         is_debug=agent_request.is_debug,
         override_version_no=agent_request.version_no,
         override_model_id=agent_request.model_id,
+        working_memory_tool_metadata_factory=(
+            _make_working_memory_tool_metadata_factory(run_context)
+            if working_memory_enabled
+            else None
+        ),
     )
     agent_run_info.run_context = run_context
     agent_run_info.runtime_context_components = build_runtime_context_components(

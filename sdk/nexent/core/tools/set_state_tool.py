@@ -12,16 +12,16 @@ logger = logging.getLogger("set_state_tool")
 class SetStateTool(Tool):
     name = "set_state"
     description = (
-        "Save a session-scoped key-value fact in working memory. Use this for "
-        "short-lived facts that should override conversational mentions within "
-        "this conversation, such as the user's stated name, task target, current "
-        "constraint, or in-progress state. This is not persistent across "
-        "conversations; use store_memory for cross-session facts."
+        "Save or update a short-lived fact in current conversation working memory. "
+        "Use immediately when the user provides session-scoped goals, constraints, "
+        "roles, decisions, task progress, or corrections that should guide later turns. "
+        "Use this instead of store_memory for temporary facts that should not persist "
+        "across conversations."
     )
     description_zh = (
-        "保存当前会话范围内的键值状态。用于当前会话内应优先遵守的短期事实，"
-        "例如用户姓名、任务目标、当前约束或进行中的状态。该信息不会跨会话长期保留；"
-        "跨会话事实应使用 store_memory。"
+        "保存或更新当前会话范围内的短期工作记忆。"
+        "当用户给出本轮会话后续需要遵守的目标、约束、角色、决策、任务进展或修正信息时，应立即使用。"
+        "临时事实不要用 store_memory 长期保存，应使用本工具。"
     )
     inputs = {
         "key": {

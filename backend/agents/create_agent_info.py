@@ -1,7 +1,7 @@
 ﻿import json
 import threading
 import logging
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urljoin
 
 from jinja2 import Template, StrictUndefined
@@ -37,6 +37,52 @@ from consts.exceptions import ValidationError
 
 logger = logging.getLogger("create_agent_info")
 logger.setLevel(logging.DEBUG)
+
+
+def _get_working_memory_tool_configs(
+    agent_identity: str,
+    metadata_factory: Callable[[str], Dict[str, Any]],
+) -> List[ToolConfig]:
+    metadata = metadata_factory(agent_identity)
+    return [
+        ToolConfig(
+            class_name="SetStateTool",
+            name="set_state",
+            description=(
+                "Save or update a short-lived fact in current conversation working memory. "
+                "Use immediately when the user provides session-scoped goals, constraints, "
+                "roles, decisions, task progress, or corrections that should guide later turns. "
+                "Use this instead of store_memory for temporary facts that should not persist "
+                "across conversations."
+            ),
+            inputs=json.dumps({
+                "key": {"type": "string", "description": "snake_case key, e.g. task_target or constraints"},
+                "value": {"type": "string", "description": "Current value to keep for this conversation"},
+            }, ensure_ascii=False),
+            output_type="string",
+            params={},
+            source="local",
+            usage=None,
+            metadata={"set_callback": metadata["set_callback"]},
+        ),
+        ToolConfig(
+            class_name="DeleteStateTool",
+            name="delete_state",
+            description=(
+                "Delete an obsolete or incorrect short-lived working memory key for the "
+                "current conversation. Use when the user says a prior goal, constraint, "
+                "decision, or temporary fact is no longer valid."
+            ),
+            inputs=json.dumps({
+                "key": {"type": "string", "description": "snake_case key to delete"},
+            }, ensure_ascii=False),
+            output_type="string",
+            params={},
+            source="local",
+            usage=None,
+            metadata={"delete_callback": metadata["delete_callback"]},
+        ),
+    ]
 
 
 def _build_internal_s3_url(file: dict) -> str:
@@ -310,6 +356,7 @@ async def create_agent_config(
     allow_memory_search: bool = True,
     version_no: int = 0,
     override_model_id: int | None = None,
+    working_memory_tool_metadata_factory: Optional[Callable[[str], Dict[str, Any]]] = None,
 ):
     agent_info = search_agent_info_by_agent_id(
         agent_id=agent_id, tenant_id=tenant_id, version_no=version_no)
@@ -331,6 +378,7 @@ async def create_agent_config(
             allow_memory_search=allow_memory_search,
             version_no=sub_agent_version_no,
             override_model_id=None,
+            working_memory_tool_metadata_factory=working_memory_tool_metadata_factory,
         )
         managed_agents.append(sub_agent_config)
 
@@ -338,6 +386,18 @@ async def create_agent_config(
     external_a2a_agents = _get_external_a2a_agents(agent_id, tenant_id, version_no)
 
     tool_list = await create_tool_config_list(agent_id, tenant_id, user_id, version_no=version_no)
+    if working_memory_tool_metadata_factory:
+        agent_identity = str(agent_info.get("name") or agent_id)
+        working_memory_tools = _get_working_memory_tool_configs(
+            agent_identity=agent_identity,
+            metadata_factory=working_memory_tool_metadata_factory,
+        )
+        tool_list.extend(working_memory_tools)
+        logger.debug(
+            "Working memory tools injected for agent=%s: %s",
+            agent_identity,
+            [tool.name for tool in working_memory_tools],
+        )
 
     # Build system prompt: prioritize segmented fields, fallback to original prompt field if not available
     duty_prompt = agent_info.get("duty_prompt", "")
@@ -929,6 +989,7 @@ async def create_agent_run_info(
     is_debug: bool = False,
     override_version_no: int | None = None,
     override_model_id: int | None = None,
+    working_memory_tool_metadata_factory: Optional[Callable[[str], Dict[str, Any]]] = None,
 ):
     # Determine which version_no to use based on is_debug flag
     # If is_debug=false, use the current published version (current_version_no)
@@ -957,6 +1018,7 @@ async def create_agent_run_info(
         "last_user_query": final_query,
         "allow_memory_search": allow_memory_search,
         "version_no": version_no,
+        "working_memory_tool_metadata_factory": working_memory_tool_metadata_factory,
     }
     if override_model_id is not None:
         create_config_kwargs["override_model_id"] = override_model_id

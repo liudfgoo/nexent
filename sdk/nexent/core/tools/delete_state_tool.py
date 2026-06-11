@@ -12,10 +12,14 @@ logger = logging.getLogger("delete_state_tool")
 class DeleteStateTool(Tool):
     name = "delete_state"
     description = (
-        "Delete a session-scoped working memory key when it is obsolete or wrong. "
-        "Use only for state within the current conversation."
+        "Delete an obsolete or incorrect short-lived working memory key for the "
+        "current conversation. Use when the user says a prior goal, constraint, "
+        "decision, or temporary fact is no longer valid."
     )
-    description_zh = "删除当前会话短期工作记忆中的某个 key。仅用于当前会话内已过期或错误的状态。"
+    description_zh = (
+        "删除当前会话短期工作记忆中已过期或错误的 key。"
+        "当用户说明之前的目标、约束、决策或临时事实不再有效时使用。"
+    )
     inputs = {
         "key": {
             "type": "string",
