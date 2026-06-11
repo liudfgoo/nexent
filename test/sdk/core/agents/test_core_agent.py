@@ -2610,3 +2610,60 @@ class TestLogModelCallParameters:
         # The exception handler logs via self.logger.log()
         agent.logger.log.assert_called()
 
+
+class TestWriteMemoryToMessagesRuntimeContext:
+    """Working Memory runtime context placement contract.
+
+    write_memory_to_messages() must emit:
+        system_prompt -> runtime_context_messages -> memory.steps
+    so the Working Memory KV block sits between the cacheable system prefix
+    and conversation history. Regression guard for the non-compression path
+    in working-memory-test-matrix.md section 2.
+    """
+
+    def _make_agent(self):
+        module = TestRunStreamRealExecution._load_core_agent_in_isolation(self)
+        CoreAgent = module.CoreAgent
+        agent = object.__new__(CoreAgent)
+        agent.memory = MagicMock()
+        agent.runtime_context_messages = []
+        return agent, module
+
+    def test_runtime_context_inserted_between_system_prompt_and_steps(self):
+        agent, _ = self._make_agent()
+        agent.memory.system_prompt.to_messages.return_value = ["SYSTEM"]
+        step_a = MagicMock()
+        step_a.to_messages.return_value = ["STEP_A"]
+        step_b = MagicMock()
+        step_b.to_messages.return_value = ["STEP_B"]
+        agent.memory.steps = [step_a, step_b]
+        agent.runtime_context_messages = ["WM"]
+
+        result = agent.write_memory_to_messages()
+
+        assert result == ["SYSTEM", "WM", "STEP_A", "STEP_B"]
+        step_a.to_messages.assert_called_with(summary_mode=False)
+        step_b.to_messages.assert_called_with(summary_mode=False)
+
+    def test_no_runtime_context_falls_back_to_baseline(self):
+        agent, _ = self._make_agent()
+        agent.memory.system_prompt.to_messages.return_value = ["SYSTEM"]
+        step = MagicMock()
+        step.to_messages.return_value = ["STEP"]
+        agent.memory.steps = [step]
+        agent.runtime_context_messages = []
+
+        assert agent.write_memory_to_messages() == ["SYSTEM", "STEP"]
+
+    def test_summary_mode_passes_through_and_preserves_runtime_context(self):
+        agent, _ = self._make_agent()
+        agent.memory.system_prompt.to_messages.return_value = ["SYSTEM"]
+        step = MagicMock()
+        step.to_messages.return_value = ["STEP"]
+        agent.memory.steps = [step]
+        agent.runtime_context_messages = ["WM"]
+
+        result = agent.write_memory_to_messages(summary_mode=True)
+
+        assert result == ["SYSTEM", "WM", "STEP"]
+        step.to_messages.assert_called_with(summary_mode=True)
