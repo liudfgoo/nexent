@@ -91,12 +91,16 @@ operator preference in the Add/Edit form.
 ## Visibility for Existing Bare-Capacity Models
 
 W11 also takes on the complementary mission of surfacing **existing**
-model rows whose capacity columns are still NULL — the legacy rows
-created before W1 step 7 made `context_window_tokens` and
-`max_output_tokens` required in the Add/Edit forms. Without W11,
-these rows silently disable W2 output-token enforcement and the W1→W2
-dispatch consistency check, and the only signal today is a backend
-WARNING that the model administrator and agent author never see.
+model rows whose capacity columns are still NULL — legacy rows created
+before W1 added the capacity columns. (Note: an operator-feedback
+revision after W11 V1 ship reverted `context_window_tokens` and
+`max_output_tokens` from "required form fields" to "optional with
+save-time defaults" — 32768 and 4096 respectively — so freshly added
+rows always land non-NULL. The bare-capacity surface targets pre-W1
+rows specifically.) Without W11, these rows silently disable W2
+output-token enforcement and the W1→W2 dispatch consistency check, and
+the only signal today is a backend WARNING that the model administrator
+and agent author never see.
 
 ### Problem Statement
 
@@ -446,7 +450,10 @@ can safely prefill:
 - `max_input_tokens`
 - `max_output_tokens`
 - `default_output_reserve_tokens`
-- `tokenizer_family`
+- `tokenizer_family` *(returned by the backend; the V1 frontend hides the
+  tokenizer input from all four model-capacity surfaces — add/edit ×
+  single/batch — so this field flows straight to the save payload without
+  operator visibility. The DB column and runtime semantics are unchanged.)*
 
 `capability_profile_version` is returned as response metadata for catalog
 matches but is not blindly written as an operator value. W1 runtime resolution
@@ -484,11 +491,11 @@ fields cannot silently fall back to `None`.
 
 | Frontend state / payload | Backend request field | Persisted column | Notes |
 | --- | --- | --- | --- |
-| `acceptedCapacity.contextWindowTokens` | `context_window_tokens` | `model_record_t.context_window_tokens` | Persist only after operator clicks "Use suggestion" or edits the field |
+| `acceptedCapacity.contextWindowTokens` | `context_window_tokens` | `model_record_t.context_window_tokens` | Persist after operator clicks "Use suggestion" or edits the field. **V1 form-level change**: this field is no longer a required form field; if the operator leaves it blank, the payload builder substitutes `32768` at save time (save-time default, not silent form prefill) so newly-added rows never land NULL. |
 | `acceptedCapacity.maxInputTokens` | `max_input_tokens` | `model_record_t.max_input_tokens` | Optional capacity field; omit only when still unset |
-| `acceptedCapacity.maxOutputTokens` | `max_output_tokens` | `model_record_t.max_output_tokens` | Required for a repaired LLM/VLM row to stop being bare |
+| `acceptedCapacity.maxOutputTokens` | `max_output_tokens` | `model_record_t.max_output_tokens` | **V1 form-level change**: no longer a required form field; if the operator leaves it blank, the payload builder substitutes `4096` at save time. A repaired LLM/VLM row therefore never stays "bare" on save — bare-capacity surfacing now targets pre-W1 legacy rows only. |
 | `acceptedCapacity.defaultOutputReserveTokens` | `default_output_reserve_tokens` | `model_record_t.default_output_reserve_tokens` | Operator-confirmed value |
-| `acceptedCapacity.tokenizerFamily` | `tokenizer_family` | `model_record_t.tokenizer_family` | Operator-confirmed value when present |
+| `acceptedCapacity.tokenizerFamily` | `tokenizer_family` | `model_record_t.tokenizer_family` | Operator-confirmed value when present. **V1 UI note**: the tokenizer input is hidden from all four model-capacity surfaces in V1 (add/edit × single/batch); when a Suggest result includes a `tokenizer_family`, the accepted payload carries it through to persistence without operator visibility. |
 | `acceptedSuggestion.suggestedProvider` | `model_factory` | `model_record_t.model_factory` | Persist only when the operator accepts canonicalization |
 | `acceptedSuggestion.canonicalModelName` | `model_name` | `model_record_t.model_name` | Persist only when the operator accepts canonicalization |
 | `acceptedSuggestion.matchKind` | `accepted_suggestion_match_kind` | none | Audit/metrics input only; do not persist as model capacity authority |

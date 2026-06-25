@@ -48,12 +48,16 @@
 
 | UI 标签 | DB 列 | 含义 | 谁负责设 |
 |---------|-------|------|---------|
-| 上下文窗口 tokens | `context_window_tokens` | 模型一次调用允许的总 token 数（input + output 合计上限） | 模型管理员，从 provider 文档抄 |
-| 最大输出 tokens | `max_output_tokens` | 模型一次回复最多输出多少 token（provider 硬上限） | 模型管理员，从 provider 文档抄 |
-| 默认输出预留 | `default_output_reserve_tokens` | 当 agent 没配 "输出预留" 时，本模型本轮预留多少 | 模型管理员（可空，留空走 SDK 默认 4096） |
+| 上下文窗口 tokens | `context_window_tokens` | 模型一次调用允许的总 token 数（input + output 合计上限） | 模型管理员，从 provider 文档抄；非必填，**留空保存时落库 32768** |
+| 最大输出 tokens | `max_output_tokens` | 模型一次回复最多输出多少 token（provider 硬上限） | 模型管理员，从 provider 文档抄；非必填，**留空保存时落库 4096** |
+| 默认输出预留 | `default_output_reserve_tokens` | 当 agent 没配 "输出预留" 时，本模型本轮预留多少 | 模型管理员（可空，留空 runtime 走 SDK 默认 4096） |
 | 最大输入 tokens | `max_input_tokens` | 部分 provider 显式给的 input-only 硬上限（多数模型未公开，留空即可）；如果填了，会再做 `min(max_input, context_window − requested_output)` | 模型管理员（一般留空） |
 
-> **UI 入口可见性**：`maxInputTokens`、`maxOutputTokens`、`defaultOutputReserveTokens`、`tokenizerFamily` 在 Add / Edit 两种模式下均可见（`ModelCapacityFields.tsx:399-407` 的注释解释了为什么不再用 `isAddMode` 隐藏 reserve）。Add 模式还可调用 W11 "建议" 按钮 — 命中已审核 catalog 时一键预填全部四个字段（context、max_output、reserve、tokenizer）。所以 Add 即可一次到位；只有 catalog 未命中、且管理员手动留空 reserve 的情况下，runtime 才会回落到 SDK 默认 4096。
+> **UI 入口可见性**（2026-06 W11 V1 简化后）：Add / Edit 两种模式均可见 `contextWindowTokens`、`maxOutputTokens`、`defaultOutputReserveTokens`、`maxInputTokens` 四项。`tokenizerFamily` 输入框已从所有四个界面（add/edit × 单个/批量）移除，DB 列与后端字段仍保留；W11 catalog 若有该值会随其他三项一同写入，操作员无须感知。
+>
+> **必填语义改动**：`contextWindowTokens` 与 `maxOutputTokens` 不再是必填项，输入框以灰字 placeholder 呈现 32768 / 4096。**用户不输入、点保存时，payload builder 才把默认值替换上去**（save-time substitute，不是静默预填到 form state）。意图：降低首次配置摩擦，与 W11 catalog 命中失败时的 fallback 共同保证 Add 路径不会失败。
+>
+> **Suggest 按钮**：Add / Edit 两种模式都可调用 — 命中已审核 catalog 时一次性预填三个可见字段（context、max_output、reserve）。Add 即可一次到位；命中失败时走上述 save-time default + 操作员补填路径。
 
 ### 2.2 Agent 编辑 UI（Agent 作者配置）→ `agent_t` 列
 
@@ -110,7 +114,7 @@
 
 **关于 model_record_t.default_output_reserve_tokens（第 3 层）的 UI 入口**：
 - Add / Edit 两种模式都渲染该字段，管理员可手填具体值
-- Add 模式可点 "建议"，命中已审核 catalog 时该字段会被一次性预填（context_window / max_output / reserve / tokenizer 一起填入），免去手抄文档
+- Add / Edit 模式可点 "建议"，命中已审核 catalog 时一次性预填三个可见字段（context_window / max_output / reserve），免去手抄文档；`tokenizer_family` 若 catalog 给了会跟随写入，UI 不展示
 - 留空（无论新建还是编辑）→ runtime fallback 到 SDK 默认 4096；对多数单轮输出够用，但写报告 / 长代码 / 复杂表格类 agent 仍可能截断 → 按模型实际 `max_output_tokens` 配一个合适值（一般取 `max_output / 2` 或 `max_output` 本身）
 
 **校验**：最终值必须满足 `0 < requested ≤ max_output_tokens`。超过 → 抛 `RequestedOutputExceedsCap`，dispatch 失败。
@@ -205,7 +209,7 @@ dispatch 时 CM-030 不生效（没有 W2 snapshot 强制 max_tokens）
 | 前端 indicator 显示 `XX/32k*`，星号 | 后端没发 `token_threshold`（snapshot 路径不通） | 同上：补 capacity；或确认 W2 链路 |
 | `soft_input_budget` 看起来比想象的低 | `soft_limit_ratio` 被租户调低（< 0.8） | 看 `tenant_config_t.soft_limit_ratio`；想激进就拉到 0.9 |
 | 模型回复总是被截断（输出半句话 / JSON 半截） | `requested_output_tokens` 太小（fallback 到 4096、或 model default 配小了、或 agent 显式设了小值） | 优先：agent 编辑设大"输出预留"；其次：管理员去模型 edit 给 `default_output_reserve_tokens` 填合理值；单次需要长输出可以 API body 临时覆盖 |
-| 新加模型的 agent 输出经常 4K 截断 | 管理员在 Add 表单留空了 `defaultOutputReserveTokens`，DB 这一列 NULL → fallback 到 4096 | Add 模式点 "建议" 让 W11 catalog 一次性预填四个字段；或事后到 edit 面板按模型 `max_output_tokens` 手填合理值 |
+| 新加模型的 agent 输出经常 4K 截断 | 管理员在 Add 表单留空了 `defaultOutputReserveTokens`，DB 这一列 NULL → fallback 到 4096 | Add / Edit 模式点 "建议" 让 W11 catalog 一次性预填三个可见字段；或事后到 edit 面板按模型 `max_output_tokens` 手填合理值 |
 | 上下文还有很多空间但已开始压缩 | `hard - soft` 间距 = 20%（默认）正在工作 | 这是设计；不想压可调高 ratio |
 
 ---

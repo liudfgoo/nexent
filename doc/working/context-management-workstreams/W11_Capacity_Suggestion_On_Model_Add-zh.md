@@ -48,7 +48,7 @@ W11 负责面向用户的“添加时建议默认值”体验，以及触发该�
 
 ## 现有裸容量模型的可见性
 
-W11 还承担一个互补任务：暴露**现有**模型行中容量列仍为 NULL 的记录，也就是 W1 步骤 7 让 `context_window_tokens` 和 `max_output_tokens` 在新增/编辑表单中必填之前创建的遗留行。没有 W11 时，这些行会静默关闭 W2 输出 token enforcement 和 W1→W2 dispatch 一致性检查；今天唯一信号是模型管理员和 agent 作者都看不到的后端 WARNING。
+W11 还承担一个互补任务：暴露**现有**模型行中容量列仍为 NULL 的记录，也就是 W1 引入这些容量列之前创建的遗留行。（说明：W11 V1 上线后基于运营反馈做了一轮修订，把 `context_window_tokens` 和 `max_output_tokens` 从"表单必填"改回"非必填 + 保存时默认值替换"——分别落库 32768 / 4096，因此新增模型行不再可能保存为 NULL。裸容量可见性面向 pre-W1 遗留行。）没有 W11 时，这些行会静默关闭 W2 输出 token enforcement 和 W1→W2 dispatch 一致性检查；今天唯一信号是模型管理员和 agent 作者都看不到的后端 WARNING。
 
 ### 问题陈述
 
@@ -253,7 +253,7 @@ POST /api/v1/models/suggest-capacity
 - `max_input_tokens`
 - `max_output_tokens`
 - `default_output_reserve_tokens`
-- `tokenizer_family`
+- `tokenizer_family` *（后端仍返回；V1 前端把 tokenizer 输入框从四个模型容量界面（add/edit × 单个/批量）全部隐藏，该字段会随其他三项一并流入保存 payload，对运维人员不可见。DB 列与运行时语义不变。）*
 
 对于目录匹配，`capability_profile_version` 作为响应元数据返回，但不会被盲目写作运维值。W1 运行时解析仍必须从保存后的 `(model_factory, model_name)` 证明 profile 匹配。
 
@@ -275,11 +275,11 @@ POST /api/v1/models/suggest-capacity
 
 | 前端状态 / payload | 后端请求字段 | 持久化列 | 说明 |
 | --- | --- | --- | --- |
-| `acceptedCapacity.contextWindowTokens` | `context_window_tokens` | `model_record_t.context_window_tokens` | 仅在运维点击“使用建议”或编辑该字段后持久化 |
+| `acceptedCapacity.contextWindowTokens` | `context_window_tokens` | `model_record_t.context_window_tokens` | 运维点击"使用建议"或编辑该字段后持久化。**V1 表单层改动**：该字段不再是必填项；运维留空时，payload builder 在保存阶段把 `32768` 替换上去（save-time default，不是静默预填到 form state），新建模型行因此永不落库为 NULL。 |
 | `acceptedCapacity.maxInputTokens` | `max_input_tokens` | `model_record_t.max_input_tokens` | 可选容量字段；仍未设置时才省略 |
-| `acceptedCapacity.maxOutputTokens` | `max_output_tokens` | `model_record_t.max_output_tokens` | 修复 LLM/VLM 裸容量行的必需字段 |
+| `acceptedCapacity.maxOutputTokens` | `max_output_tokens` | `model_record_t.max_output_tokens` | **V1 表单层改动**：该字段不再是必填项；运维留空时，payload builder 在保存阶段替换为 `4096`。LLM/VLM 行保存后不再可能保持"裸容量"状态——裸容量可见性只针对 pre-W1 遗留行。 |
 | `acceptedCapacity.defaultOutputReserveTokens` | `default_output_reserve_tokens` | `model_record_t.default_output_reserve_tokens` | 运维确认值 |
-| `acceptedCapacity.tokenizerFamily` | `tokenizer_family` | `model_record_t.tokenizer_family` | 存在时作为运维确认值 |
+| `acceptedCapacity.tokenizerFamily` | `tokenizer_family` | `model_record_t.tokenizer_family` | 存在时作为运维确认值。**V1 UI 说明**：V1 把 tokenizer 输入框从四个模型容量界面（add/edit × 单个/批量）全部隐藏；Suggest 返回的 `tokenizer_family` 会跟随保存 payload 持久化，运维不可见。 |
 | `acceptedSuggestion.suggestedProvider` | `model_factory` | `model_record_t.model_factory` | 仅在运维接受规范化时持久化 |
 | `acceptedSuggestion.canonicalModelName` | `model_name` | `model_record_t.model_name` | 仅在运维接受规范化时持久化 |
 | `acceptedSuggestion.matchKind` | `accepted_suggestion_match_kind` | 无 | 仅用于审计/指标；不作为模型容量权威持久化 |
