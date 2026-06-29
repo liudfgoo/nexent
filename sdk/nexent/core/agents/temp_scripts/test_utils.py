@@ -197,6 +197,10 @@ def build_agent_run_info(
     skills: list = None,
     extra_body: Optional[dict] = None,
     offload_store: Optional[object] = None,
+    event_store: Optional[object] = None,
+    session_id: Optional[str] = None,
+    resume_from: Optional[str] = None,
+    resume_fidelity: Optional[str] = None,
 ) -> AgentRunInfo:
     """
     构造 AgentRunInfo
@@ -311,6 +315,10 @@ def build_agent_run_info(
         mcp_host=None,
         history=history,
         stop_event=threading.Event(),
+        event_store=event_store,
+        session_id=session_id,
+        resume_from=resume_from,
+        resume_fidelity=resume_fidelity,
     )
 
 
