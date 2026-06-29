@@ -23,6 +23,17 @@ from .agent_model import (
 from .agent_context import ContextManager, SummaryTaskStep
 from .summary_cache import PreviousSummaryCache, CurrentSummaryCache, CompressionCallRecord
 from .summary_config import ContextManagerConfig, StrategyType
+from .agent_event import (
+    Event,
+    EventType,
+    EventStore,
+    BranchResult,
+    Session,
+    Run,
+    PayloadUnion,
+    render,
+    pick_active_compaction,
+)
 
 __all__ = [
     "CoreAgent",
@@ -52,4 +63,14 @@ __all__ = [
     "BufferedStrategy",
     "PriorityWeightedStrategy",
     "ComponentType",
+    # agent_event persistence
+    "Event",
+    "EventType",
+    "EventStore",
+    "BranchResult",
+    "Session",
+    "Run",
+    "PayloadUnion",
+    "render",
+    "pick_active_compaction",
 ]
