@@ -192,6 +192,25 @@ class AgentRunInfo(BaseModel):
                     "If provided, it will be attached to the CoreAgent instead of creating a new one.",
         default=None
     )
+    event_store: Optional[Any] = Field(
+        description="EventStore instance for conversation persistence. "
+                    "If None, no events are logged.",
+        default=None
+    )
+    session_id: Optional[str] = Field(
+        description="Session ID for event persistence (= monitoring conversation_id).",
+        default=None
+    )
+    resume_from: Optional[str] = Field(
+        description="Leaf event UUID to resume from. If set, events are read "
+                    "from the store and memory is reconstructed instead of using history.",
+        default=None
+    )
+    resume_fidelity: Optional[str] = Field(
+        description="Resume fidelity: 'lossy' (Level 0) or 'faithful' (Level 1). "
+                    "Defaults to 'lossy'.",
+        default=None
+    )
 
     class Config:
         arbitrary_types_allowed = True

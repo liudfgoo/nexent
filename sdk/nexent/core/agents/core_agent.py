@@ -2,7 +2,8 @@ import json
 import ast
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
+from uuid import uuid4
 from textwrap import dedent
 from typing import Any, Optional, List, Dict
 from collections.abc import Generator
@@ -19,6 +20,9 @@ from smolagents.utils import AgentExecutionError, AgentGenerationError, truncate
     extract_code_from_text
 
 from ...monitor import get_monitoring_manager
+
+import logging
+logger = logging.getLogger(__name__)
 
 from ..utils.observer import MessageObserver, ProcessType
 from jinja2 import Template, StrictUndefined
@@ -253,6 +257,15 @@ class CoreAgent(CodeAgent):
         """
         self.step_metrics: List[dict] = []  # Quantitative metrics per step
         self._last_uncompressed_est = 0
+        # -- Event persistence state (injected by NexentAgent) --
+        self._event_store = None  # Optional[EventStore]
+        self._session_id = None  # Optional[UUID]
+        self._run_id = None  # Optional[UUID]
+        self._turn_id = None  # Optional[UUID]
+        self._parent_event_cursor = None  # Optional[UUID] — last event_id in chain
+        self._llm_message_id = None  # Optional[str]
+        # step_index → list of event_ids written for that step (populated by _emit_event)
+        self._step_event_map: Dict[int, list] = {}
         # Override smolagent default to prevent extracting ```python blocks from KB content.
         # code_block_tags[0] and [1] are used by the system prompt template for opening/closing
         # tags (e.g., ``` and ```). extract_code_from_text iterates all tags as language
@@ -270,6 +283,44 @@ class CoreAgent(CodeAgent):
     def clear_ephemeral_messages(self) -> None:
         """Clear ephemeral system messages after the run completes."""
         self._ephemeral_system_messages = None
+
+    # -- Event persistence helper --------------------------------------------
+
+    def _emit_event(self, event_type, role, payload, **extra_fields) -> None:
+        """Append an event to the EventStore if configured.
+
+        Safe to call from any point in the agent loop — failures are caught
+        and logged, never propagated to the caller.
+        """
+        if self._event_store is None:
+            return
+        try:
+            from .agent_event.models import Event as AgentEvent
+            from uuid import UUID as UUIDType
+            ev = AgentEvent(
+                uuid=uuid4(),
+                parentUuid=self._parent_event_cursor,
+                sessionId=self._session_id,
+                runId=self._run_id,
+                turnId=self._turn_id,
+                agentId=self.agent_name,
+                llmMessageId=self._llm_message_id,
+                seq=0,  # store assigns
+                type=event_type,
+                role=role,
+                stepIndex=extra_fields.pop('stepIndex', getattr(self, 'step_number', None)),
+                timestamp=datetime.now(timezone.utc),
+                payload=payload,
+                **extra_fields,
+            )
+            self._event_store.append(ev)
+            self._parent_event_cursor = ev.event_id
+            # Track step_index → event_id mapping for covers_event_ids
+            step_idx = ev.step_index
+            if step_idx is not None:
+                self._step_event_map.setdefault(step_idx, []).append(ev.event_id)
+        except Exception:
+            logger.error("Event persistence failed: %s %s", event_type, extra_fields, exc_info=True)
 
     def _verification_tool_names(self) -> List[str]:
         names = set()
@@ -460,9 +511,40 @@ Additional Args:
             memory_step.token_usage = chat_message.token_usage
             memory_step.model_output = model_output
 
+            # -- Event persistence: assistant_message + usage --
+            if self._event_store is not None:
+                from .agent_event.models import AssistantMessagePayload, AssistantReasoningPayload
+                # Set llm_message_id from model response
+                self._llm_message_id = getattr(chat_message, 'id', None) or f"lm_{uuid4().hex[:16]}"
+                usage_dict = None
+                if memory_step.token_usage:
+                    usage_dict = {
+                        "input_tokens": getattr(memory_step.token_usage, 'input_tokens', None),
+                        "output_tokens": getattr(memory_step.token_usage, 'output_tokens', None),
+                    }
+                self._emit_event(
+                    "assistant_message", "assistant",
+                    AssistantMessagePayload(text=model_output, is_final_answer=False),
+                    model=getattr(self.model, 'model_id', None),
+                    usage=usage_dict,
+                    stopReason=getattr(chat_message, 'stop_reason', None),
+                    stepIndex=memory_step.step_number,
+                )
+
             self.logger.log_markdown(
                 content=model_output, title="MODEL OUTPUT", level=LogLevel.INFO)
         except Exception as e:
+            # -- Event persistence: error (generation) --
+            if self._event_store is not None:
+                from .agent_event.models import ErrorPayload
+                self._emit_event(
+                    "error", "assistant",
+                    ErrorPayload(
+                        error_type="AgentGenerationError",
+                        message=str(e),
+                        stepIndex=memory_step.step_number,
+                    ),
+                )
             raise AgentGenerationError(
                 f"Error in generating model output:\n{e}", self.logger) from e
 
@@ -505,7 +587,7 @@ Additional Args:
         tool_call = ToolCall(
             name="python_interpreter",
             arguments=code_action,
-            id=f"call_{len(self.memory.steps)}",
+            id=f"tc_{uuid4().hex[:16]}",
         )
         # memory_step.invoked_tools = extract_invoked_tools(code_action, self.tools) if self.tools else []
         memory_step.invoked_tool_signatures = (
@@ -528,12 +610,24 @@ Additional Args:
         tool_call = ToolCall(
             name="python_interpreter",
             arguments=compact_arguments,
-            id=f"call_{len(self.memory.steps)}",
+            id=f"tc_{uuid4().hex[:16]}",
         )
         memory_step.tool_calls = [tool_call]
 
-
-        # Execute
+        # -- Event persistence: tool_call --
+        if self._event_store is not None:
+            from .agent_event.models import ToolCallPayload
+            self._emit_event(
+                "tool_call", "assistant",
+                ToolCallPayload(
+                    tool_call_id=tool_call.id,
+                    tool_name="python_interpreter",
+                    arguments={"code_action": code_action},
+                    source="local",
+                ),
+                stepIndex=memory_step.step_number,
+                metadata={"invoked_tools": memory_step.invoked_tool_signatures or []},
+            )
         self.logger.log_code(title="Executing parsed code:",
                              content=code_action, level=LogLevel.INFO)
         exec_start = time.time()
@@ -588,6 +682,30 @@ Additional Args:
                 f"[Code Execution] step={memory_step.step_number} failed after {exec_duration_ms:.1f}ms: {error_msg}",
                 level=LogLevel.ERROR,
             )
+            # -- Event persistence: error (execution) --
+            if self._event_store is not None:
+                from .agent_event.models import ErrorPayload, ToolResultPayload
+                # Write tool_result for the failed execution
+                if 'tool_call' in dir() and tool_call:
+                    self._emit_event(
+                        "tool_result", "tool",
+                        ToolResultPayload(
+                            tool_call_id=tool_call.id,
+                            output_raw=error_msg,
+                            output_chars=len(error_msg),
+                            is_error=True,
+                            duration_ms=int(exec_duration_ms),
+                        ),
+                        stepIndex=memory_step.step_number,
+                    )
+                self._emit_event(
+                    "error", "assistant",
+                    ErrorPayload(
+                        error_type="AgentExecutionError",
+                        message=error_msg,
+                        stepIndex=memory_step.step_number,
+                    ),
+                )
             raise AgentExecutionError(error_msg, self.logger)
 
         exec_duration_ms = (time.time() - exec_start) * 1000
@@ -623,6 +741,22 @@ Additional Args:
             else:
                 memory_step._raw_observation = observation
         # --- end raw observation save ---
+
+        # -- Event persistence: tool_result (BEFORE truncation!) --
+        if self._event_store is not None:
+            from .agent_event.models import ToolResultPayload
+            self._emit_event(
+                "tool_result", "tool",
+                ToolResultPayload(
+                    tool_call_id=tool_call.id,
+                    output_raw=observation,  # full observation before truncation
+                    output_chars=len(observation),
+                    is_error=False,
+                    duration_ms=int(exec_duration_ms),
+                ),
+                stepIndex=memory_step.step_number,
+                latencyMs=int(exec_duration_ms),
+            )
 
         verification_controller = getattr(self, "verification_controller", None)
         if verification_controller:
@@ -703,6 +837,21 @@ Additional Args:
 You have been provided with these additional arguments, that you can access using the keys as variables in your python code:
 {str(additional_args)}."""
 
+        # Initialize step_number before emitting any events, so that
+        # system_prompt / run_lifecycle / user_input events get the correct
+        # stepIndex.  On resume (_history_step_count > 0), continue from
+        # the max existing step_number + 1 so stepIndex values don't collide
+        # with reconstructed history steps.
+        if self._history_step_count > 0:
+            max_sn = max(
+                (s.step_number for s in self.memory.steps if hasattr(s, 'step_number')),
+                default=0,
+            )
+            self.step_number = max_sn + 1
+            logger.debug(f"[Resume] step_number init: _history_step_count={self._history_step_count}, max_sn={max_sn}, step_number={self.step_number}")
+        else:
+            self.step_number = 1
+
         system_prompt_content = self.system_prompt
         if self.context_manager and self.context_manager.get_registered_components():
             component_messages = self.context_manager.build_system_prompt()
@@ -713,6 +862,34 @@ You have been provided with these additional arguments, that you can access usin
 
         self.memory.system_prompt = SystemPromptStep(
             system_prompt=system_prompt_content)
+
+        # -- Event persistence: system_prompt + run_lifecycle(started) --
+        if self._event_store is not None:
+            from .agent_event.models import SystemPromptPayload, RunLifecyclePayload
+            render_config = {}
+            if self.context_manager and self.context_manager.config:
+                cfg = self.context_manager.config
+                render_config = {
+                    "max_observation_length": cfg.max_observation_length,
+                    "per_step_render_limit": getattr(cfg, 'per_step_render_limit', 0),
+                    "chars_per_token": cfg.chars_per_token,
+                }
+            self._emit_event(
+                "system_prompt", "system",
+                SystemPromptPayload(
+                    rendered_prompt=system_prompt_content,
+                    tool_defs_hash="",
+                    injected_components=[],
+                ),
+            )
+            self._emit_event(
+                "run_lifecycle", "system",
+                RunLifecyclePayload(
+                    action="started",
+                    render_config=render_config if render_config else None,
+                ),
+            )
+
         if reset:
             self.memory.reset()
             self.monitor.reset()
@@ -726,6 +903,14 @@ You have been provided with these additional arguments, that you can access usin
             self.name, ProcessType.AGENT_NEW_RUN, self.task.strip())
 
         self.memory.steps.append(TaskStep(task=self.task, task_images=images))
+
+        # -- Event persistence: user_input --
+        if self._event_store is not None:
+            from .agent_event.models import UserInputPayload
+            self._emit_event(
+                "user_input", "user",
+                UserInputPayload(text=self.task),
+            )
 
         if getattr(self, "python_executor", None):
             self.python_executor.send_variables(variables=self.state)
@@ -813,7 +998,6 @@ You have been provided with these additional arguments, that you can access usin
     ) -> Generator[ActionStep | PlanningStep | FinalAnswerStep]:
         final_answer = None
         action_step = None
-        self.step_number = 1
         returned_final_answer = False
         final_verification_round = 0
         verification_config = getattr(

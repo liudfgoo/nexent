@@ -162,6 +162,14 @@ class NexentAgent:
         self.mcp_tool_collection = mcp_tool_collection
 
         self.agent = None
+        # -- Event persistence state --
+        self._event_store = None  # Injected via configure_persistence()
+        self._session_id = None  # UUID
+
+    def configure_persistence(self, event_store, session_id) -> None:
+        """Inject EventStore and session_id for conversation persistence."""
+        self._event_store = event_store
+        self._session_id = session_id
 
     def create_model(self, model_cite_name: str):
         """create a model instance"""
@@ -458,16 +466,24 @@ extra_body=model_config.extra_body,
                 for component in context_components:
                     agent.context_manager.register_component(component)
 
+            # Inject event persistence state into CoreAgent.
+            # CM/offload callbacks are NOT wired here — they are wired in
+            # run_agent._finalize_persistence after the CM is finalized
+            # (i.e. after any external CM swap).
+            if self._event_store is not None:
+                agent._event_store = self._event_store
+                agent._session_id = self._session_id
+
             return agent
         except Exception as e:
             raise ValueError(f"Error in creating agent, agent name: {agent_config.name}, Error: {e}")
 
     def add_history_to_agent(self, history: List[AgentHistory]):
         """
-        Add conversation history to agent's memory
+        Add conversation history to agent's memory.
 
-        Args:
-            history: List of conversation messages with role and content
+        Delegates to MemoryReconstructor with Level 0 (lossy) fidelity,
+        which is equivalent to the previous inline implementation.
         """
         if history is None:
             return
@@ -478,18 +494,31 @@ extra_body=model_config.extra_body,
         if not all(isinstance(msg, AgentHistory) for msg in history):
             raise TypeError("history must be a list of AgentHistory objects")
 
-        self.agent.memory.reset()
-        # Add conversation history to memory sequentially
+        # Build synthetic events from history, then reconstruct via MemoryReconstructor
+        from .agent_event.models import Event as AgentEvent, EventType, UserInputPayload, AssistantMessagePayload
+        from .agent_event.reconstructor import MemoryReconstructor
+        from uuid import uuid4 as _uuid4
+        from datetime import datetime as _dt, timezone as _tz
+
+        events = []
         for msg in history:
             if msg.role == 'user':
-                # Create task step for user message
-                self.agent.memory.steps.append(TaskStep(task=msg.content))
+                events.append(AgentEvent(
+                    uuid=_uuid4(), sessionId=self._session_id or _uuid4(), agentId=self.agent.agent_name,
+                    seq=0, type=EventType.user_input, role='user',
+                    timestamp=_dt.now(_tz.utc),
+                    payload=UserInputPayload(text=msg.content),
+                ))
             elif msg.role == 'assistant':
-                self.agent.memory.steps.append(ActionStep(step_number=len(self.agent.memory.steps) + 1,
-                                                          timing=Timing(start_time=time.time()),
-                                                          action_output=msg.content, model_output=msg.content))
+                events.append(AgentEvent(
+                    uuid=_uuid4(), sessionId=self._session_id or _uuid4(), agentId=self.agent.agent_name,
+                    seq=0, type=EventType.assistant_message, role='assistant',
+                    timestamp=_dt.now(_tz.utc),
+                    payload=AssistantMessagePayload(text=msg.content),
+                ))
 
-        self.agent._history_step_count = len(self.agent.memory.steps)
+        reconstructor = MemoryReconstructor()
+        reconstructor.reconstruct(self.agent, events, fidelity="lossy")
     def _build_reloadable_archives_messages(self, query: str = "") -> List[ChatMessage]:
         """Build ephemeral ChatMessages listing reloadable offload archives.
 
@@ -524,6 +553,31 @@ extra_body=model_config.extra_body,
     def agent_run_with_observer(self, query: str, reset=True):
         if not isinstance(self.agent, CoreAgent):
             raise TypeError(f"agent must be a CoreAgent object, not {type(self.agent)}")
+
+        # -- Event persistence: generate run_id / turn_id --
+        from uuid import uuid4 as _uuid4
+        run_id = _uuid4()
+        turn_id = _uuid4()
+        if self._event_store is not None:
+            self.agent._run_id = run_id
+            self.agent._turn_id = turn_id
+            # Create Run record at start
+            from .agent_event.models import Run as AgentRun
+            from datetime import datetime as _dt, timezone as _tz
+            from uuid import UUID as _UUID
+            try:
+                sid = _UUID(self._session_id) if isinstance(self._session_id, str) else self._session_id
+                self._event_store.upsert_run(AgentRun(
+                    run_id=run_id,
+                    session_id=sid or _uuid4(),
+                    turn_id=turn_id,
+                    agent_id=self.agent.agent_name,
+                    query=query,
+                    status="running",
+                    started_at=_dt.now(_tz.utc),
+                ))
+            except Exception:
+                logger.debug("Run record creation skipped", exc_info=True)
 
         monitoring_manager = get_monitoring_manager()
         current_metadata = get_agent_monitoring_context() or AgentRunMetadata()
@@ -589,6 +643,17 @@ extra_body=model_config.extra_body,
 
                         if hasattr(step_log, "error") and step_log.error is not None:
                             observer.add_message("", ProcessType.ERROR, str(step_log.error))
+                            # -- Event persistence: consumption-loop error --
+                            if self._event_store is not None:
+                                from .agent_event.models import ErrorPayload
+                                self.agent._emit_event(
+                                    "error", "assistant",
+                                    ErrorPayload(
+                                        error_type=type(step_log.error).__name__,
+                                        message=str(step_log.error),
+                                        stepIndex=step_log.step_number,
+                                    ),
+                                )
 
                     if step_log is None:
                         raise ValueError("Agent run produced no output")
@@ -610,13 +675,68 @@ extra_body=model_config.extra_body,
                     observer.add_message(self.agent.agent_name,
                                          ProcessType.FINAL_ANSWER, final_answer_str)
 
+                    # -- Event persistence: final answer + run_lifecycle(ended) --
+                    if self._event_store is not None:
+                        from .agent_event.models import AssistantMessagePayload, RunLifecyclePayload
+                        from datetime import datetime as _dt, timezone as _tz
+                        self.agent._emit_event(
+                            "assistant_message", "assistant",
+                            AssistantMessagePayload(text=final_answer_str, is_final_answer=True),
+                        )
+                        self.agent._emit_event(
+                            "run_lifecycle", "system",
+                            RunLifecyclePayload(action="ended", stop_reason="end_turn"),
+                        )
+                        # Update Run record
+                        from .agent_event.models import Run
+                        try:
+                            r = self._event_store.get_run(run_id)
+                            r.status = "completed"
+                            r.ended_at = _dt.now(_tz.utc)
+                            r.final_answer = final_answer_str
+                            self._event_store.upsert_run(r)
+                        except Exception:
+                            logger.debug("Run record update skipped", exc_info=True)
+
                     # Check if we need to stop from external stop_event
                     if self.agent.stop_event.is_set():
                         observer.add_message(self.agent.agent_name, ProcessType.ERROR,
                                              "Agent execution interrupted by external stop signal")
+                        # -- Event persistence: run_lifecycle(interrupted) --
+                        if self._event_store is not None:
+                            from .agent_event.models import RunLifecyclePayload
+                            from datetime import datetime as _dt, timezone as _tz
+                            self.agent._emit_event(
+                                "run_lifecycle", "system",
+                                RunLifecyclePayload(action="interrupted"),
+                            )
                 except Exception as e:
                     observer.add_message(agent_name=self.agent.agent_name, process_type=ProcessType.ERROR,
                                          content=f"Error in interaction: {str(e)}")
+                    # -- Event persistence: error + run_lifecycle(ended, error) --
+                    if self._event_store is not None:
+                        from .agent_event.models import ErrorPayload, RunLifecyclePayload
+                        from datetime import datetime as _dt, timezone as _tz
+                        self.agent._emit_event(
+                            "error", "assistant",
+                            ErrorPayload(
+                                error_type=type(e).__name__,
+                                message=str(e),
+                            ),
+                        )
+                        self.agent._emit_event(
+                            "run_lifecycle", "system",
+                            RunLifecyclePayload(action="ended", stop_reason="error"),
+                        )
+                        # Update Run record to failed
+                        from .agent_event.models import Run
+                        try:
+                            r = self._event_store.get_run(run_id)
+                            r.status = "failed"
+                            r.ended_at = _dt.now(_tz.utc)
+                            self._event_store.upsert_run(r)
+                        except Exception:
+                            logger.debug("Run record update skipped on error path", exc_info=True)
                     raise ValueError(f"Error in interaction: {str(e)}")
 
                 finally:
