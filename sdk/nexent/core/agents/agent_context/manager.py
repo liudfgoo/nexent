@@ -72,6 +72,12 @@ class ContextManager:
         self._last_uncompressed_token_count: Optional[int] = None
         self._last_compressed_token_count: Optional[int] = None
 
+        # Event persistence reference — injected externally via _event_store
+        self._event_store = None
+        # Callback for compaction events: see _on_compaction signature below.
+        # Set by run_agent._wire_persistence_callbacks.
+        self._on_compaction = None
+
         if self.config.max_summary_input_tokens <= 0:
             self.config.max_summary_input_tokens = int(self.config.token_threshold * 1.2)
         if self.config.max_summary_reduce_tokens <= 0:
@@ -212,6 +218,29 @@ class ContextManager:
                     memory, prev_summary_step, prev_tail_steps, curr_kept_steps
                 )
                 self._last_compressed_token_count = msg_token_count(compressed_msgs, self.config.chars_per_token)
+
+                # -- Event persistence: notify compaction callback for cache hit --
+                if self._on_compaction is not None:
+                    try:
+                        model_id = str(getattr(model, 'model_id', '')) or None
+                        if self._previous_summary_cache is not None and is_valid:
+                            # In bypass path, all prev steps are covered by the cache
+                            bypass_prev_step_numbers = [
+                                s.step_number for s in prev_steps
+                                if isinstance(s, ActionStep) and hasattr(s, 'step_number')
+                            ]
+                            self._on_compaction(
+                                cache_type="previous",
+                                summary_text=self._previous_summary_cache.summary_text,
+                                covered_pairs=self._previous_summary_cache.covered_pairs,
+                                anchor_fingerprint=self._previous_summary_cache.anchor_fingerprint,
+                                model_id=model_id,
+                                records=[],  # cache hit — no new LLM call
+                                compressed_step_numbers=bypass_prev_step_numbers,
+                            )
+                    except Exception:
+                        logger.debug("compaction callback failed in bypass", exc_info=True)
+
                 return compressed_msgs
 
             self._step_local_log.clear()
@@ -237,9 +266,11 @@ class ContextManager:
                 )
 
             # --------------- Previous phase ---------------
+            prev_result = None
             prev_summary_step: Optional[SummaryTaskStep] = None
             prev_tail_steps: List[MemoryStep] = list(prev_steps)
             prev_pairs = extract_pairs(prev_steps)
+            prev_compressed_step_numbers: List[int] = []
 
             if compress_prev and prev_pairs:
                 keep_n = min(self.config.keep_recent_pairs, len(prev_pairs))
@@ -260,6 +291,11 @@ class ContextManager:
                             prefix="Context fallback, Truncated raw history:" if is_fallback else "Summary of earlier steps in this task:"
                         )
                         prev_tail_steps = self._renderer.pairs_to_steps(pairs_to_keep)
+                    # Collect step_numbers of compressed pairs for covers_event_ids
+                    prev_compressed_step_numbers = [
+                        pair[1].step_number for pair in pairs_to_compress
+                        if hasattr(pair[1], 'step_number')
+                    ]
             elif prev_pairs:
                 # if cache is valid, use cache + uncovered display
                 is_valid, covered_idx = is_prev_cache_valid(prev_pairs, self._previous_summary_cache)
@@ -272,7 +308,9 @@ class ContextManager:
                     prev_tail_steps = self._renderer.pairs_to_steps(uncovered)
 
             # --------------- Current phase ---------------
+            curr_result = None
             curr_kept_steps: List[MemoryStep] = list(curr_steps)
+            curr_compressed_step_numbers: List[int] = []
 
             if curr_steps:
                 curr_task = curr_steps[0] if isinstance(curr_steps[0], TaskStep) else None
@@ -314,6 +352,11 @@ class ContextManager:
                                 + [curr_summary_step]
                                 + list(actions_to_keep)
                             )
+                        # Collect step_numbers of compressed actions for covers_event_ids
+                        curr_compressed_step_numbers = [
+                            s.step_number for s in actions_to_compress
+                            if hasattr(s, 'step_number')
+                        ]
                 elif curr_action_steps:
                     is_valid, covered_idx = is_curr_cache_valid(curr_action_steps, self._current_summary_cache)
                     if is_valid:
@@ -329,6 +372,36 @@ class ContextManager:
             )
             final_tokens = msg_token_count(final_messages, self.config.chars_per_token)
             self._last_compressed_token_count = final_tokens
+
+            # -- Event persistence: notify compaction callback --
+            if self._on_compaction is not None:
+                try:
+                    model_id = str(getattr(model, 'model_id', '')) or None
+                    if self._previous_summary_cache is not None:
+                        prev_records = prev_result.records if prev_result else []
+                        self._on_compaction(
+                            cache_type="previous",
+                            summary_text=self._previous_summary_cache.summary_text,
+                            covered_pairs=self._previous_summary_cache.covered_pairs,
+                            anchor_fingerprint=self._previous_summary_cache.anchor_fingerprint,
+                            model_id=model_id,
+                            records=prev_records,
+                            compressed_step_numbers=prev_compressed_step_numbers,
+                        )
+                    if self._current_summary_cache is not None:
+                        curr_records = curr_result.records if curr_result else []
+                        self._on_compaction(
+                            cache_type="current",
+                            summary_text=self._current_summary_cache.summary_text,
+                            end_steps=self._current_summary_cache.end_steps,
+                            anchor_fingerprint=self._current_summary_cache.anchor_fingerprint,
+                            model_id=model_id,
+                            records=curr_records,
+                            compressed_step_numbers=curr_compressed_step_numbers,
+                        )
+                except Exception:
+                    logger.debug("compaction callback failed", exc_info=True)
+
             # This situation is unlikely to occur unless the threshold itself is set unreasonably small
             if final_tokens > int(self.config.token_threshold * 1.1):
                 logger.warning(

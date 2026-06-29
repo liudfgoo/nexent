@@ -52,6 +52,11 @@ class OffloadStore:
         # the reload path was actually exercised (not inferred from streamed text).
         self._reload_hits = 0
         self._reload_misses = 0
+        # Event persistence reference — injected externally
+        self._event_store = None
+        # Callback for offload events: (handle, description, original_chars, preview)
+        #   -> None. Set by CoreAgent via NexentAgent.
+        self._on_offload = None
 
     def store(self, content: str, description: str = "") -> Optional[str]:
         """Store content (+ optional description) and return a UUID handle.
@@ -86,6 +91,22 @@ class OffloadStore:
             entry_tokens = OffloadStore._tokenize(description)
             self._store[handle] = _Entry(content, description, tokens=entry_tokens)
             self._current_total += len(content)
+
+            # -- Event persistence: offload callback --
+            if self._on_offload is not None:
+                try:
+                    preview = content[:200] if content else ""
+                    self._on_offload(handle, description, len(content), preview)
+                except Exception:
+                    logger.debug("offload event callback failed", exc_info=True)
+
+            # -- Event persistence: blob storage --
+            if self._event_store is not None:
+                try:
+                    self._event_store.put_blob(content)
+                except Exception:
+                    logger.debug("offload blob storage failed", exc_info=True)
+
         return handle
 
     def reload(self, handle: str) -> Optional[str]:

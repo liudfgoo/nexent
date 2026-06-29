@@ -10,6 +10,7 @@ class PreviousSummaryCache:
     summary_text: str
     covered_pairs: int
     anchor_fingerprint: str
+    covers_event_ids: list = None  # UUIDs of events covered by this summary
 
 
 @dataclass
@@ -18,6 +19,7 @@ class CurrentSummaryCache:
     summary_text: str
     end_steps: int
     anchor_fingerprint: str
+    covers_event_ids: list = None  # UUIDs of events covered by this summary
 
 
 @dataclass
