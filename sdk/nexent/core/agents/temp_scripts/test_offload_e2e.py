@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Offload/reload 端到端价值验证。
+"""Offload/reload end-to-end value verification.
 
-场景
+Scenario
 ----
-1. 预加载长历史（long_inventory_history.md, ~5000 tokens）
-2. Turn 1 执行 Python 代码，生成 ~8000 字符的随机输出（含隐藏凭据值）
-   历史 + Turn 1 输出超过 token_threshold → 压缩触发 → Turn 1 输出被 offload
-3. Turn 2 问凭据值。LLM 不能重新执行（随机种子丢失）。
-   压缩 summary 不会包含长随机字符串细节 → 必须 reload。
-4. Turn 3:Turn 2 的 reload 输出本身可能超过 per_step_render_limit，若被再次 offload 则会在
-   inventory 中产生「内容雷同但 handle 不同」的重复条目，造成上下文污染。Turn 3 这里是无关query, 检验下offload
-
+1. Pre-load long history (long_inventory_history.md, ~5000 tokens)
+2. Turn 1: execute Python code, generate ~8000 chars of random output
+   History + Turn 1 output exceeds token_threshold -> compression triggers -> Turn 1 output offloaded
+3. Turn 2: ask for credential value. LLM cannot re-execute (random seed lost).
+   Compressed summary won't contain long random string detail -> must reload.
+4. Turn 3: Turn 2's reload output may exceed per-step render limit; if offloaded
+   again, it creates duplicate entries with different handles in the inventory.
+   Turn 3 is an unrelated query to verify offload dedup.
 """
 
 import asyncio
@@ -28,7 +28,7 @@ from test_utils import (
 )
 from nexent.core.agents.agent_context import ContextManager
 
-# 凭据值（与 long_inventory_history.md 中一致，作为验证锚点）
+# Credential values (must match long_inventory_history.md — used as verification anchors)
 NEEDLE_PW = "KX9mP2vR7qW4nL8jF3hT6yB1dC5sA0gU"
 NEEDLE_TOKEN = "tok_8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d"  # REDIS_CLUSTER_TOKEN
 
@@ -60,25 +60,29 @@ async def test_offload_reload_value(debug: bool = False):
 
     cm_config = ContextManagerConfig(
         enabled=True,
-        token_threshold=3600,           # 极低阈值，确保历史即触发压缩
+        token_threshold=3600,
         keep_recent_steps=1,
         keep_recent_pairs=0,
-        per_step_render_limit=1200,     # 超过 2500 字符触发 offload
-        enable_reload=True,
+        max_memory_step_length=1000,
+        offload_enabled=True,
         max_offload_entry_chars=50000,
         max_observation_length=900,
         chars_per_token=1.2,
     )
     shared_cm = ContextManager(config=cm_config, max_steps=12)
-    store = shared_cm.offload_store
+    # NOTE: do NOT capture store = shared_cm.offload_store here.
+    # _mount_conversation_context_manager replaces shared_cm._offload_store
+    # with a new instance created by nexent_agent.py, so a pre-captured
+    # reference would always see an empty store.  Use shared_cm.offload_store
+    # at each check point instead.
 
-    # 预加载长历史 → 已有 context 压力
+    # Pre-load long history -> existing context pressure
     hist_path = os.path.join(os.path.dirname(__file__), "long_inventory_history.md")
     base_history = parse_conversation_to_history(hist_path) if os.path.exists(hist_path) else []
     conversation = list(base_history)
     print(f"[Setup] base history: {len(base_history)} msgs")
 
-    # ── Turn 1: 生成不可复现的大输出 ──
+    # -- Turn 1: generate non-reproducible large output --
     t1 = (
         "请直接执行下面这段 Python 代码，不要修改它。执行完毕后告诉我总共生成了多少行输出：\n\n"
         f"```python\n{TURN1_CODE}\n```"
@@ -93,11 +97,11 @@ async def test_offload_reload_value(debug: bool = False):
     )
     info1.context_manager = shared_cm
     r1 = await run_agent_with_tracking(info1, debug=False)
-    print(f"[Turn 1] Steps={r1.step_count}, Store entries={len(store)}")
+    print(f"[Turn 1] Steps={r1.step_count}, Store entries={len(shared_cm.offload_store)}")
     conversation.append(AgentHistory(role="user", content=t1))
     conversation.append(AgentHistory(role="assistant", content=r1.final_answer))
 
-    # ── 填充轮次: 确保压缩确实触发 ──
+    # -- Filler turns: ensure compression actually triggers --
     for fi, fq in enumerate([
         "请解释服务器健康检查中 CPU、内存、磁盘三个指标的意义",
         "磁盘使用率过高时有哪些常见的排查思路",
@@ -110,11 +114,11 @@ async def test_offload_reload_value(debug: bool = False):
         )
         inf.context_manager = shared_cm
         rf = await run_agent_with_tracking(inf, debug=False)
-        print(f"[Filler {fi+1}] Steps={rf.step_count}, Store={len(store)}")
+        print(f"[Filler {fi+1}] Steps={rf.step_count}, Store={len(shared_cm.offload_store)}")
         conversation.append(AgentHistory(role="user", content=fq))
         conversation.append(AgentHistory(role="assistant", content=rf.final_answer))
 
-    # ── Turn 2: 必须 reload ──
+    # -- Turn 2: must reload --
     t2 = (
         "在最早加载的服务器健康检查报告中，末尾有一个「关键配置项」部分。"
         "请输出其中 DATABASE_MASTER_PASSWORD 的值。"
@@ -136,8 +140,9 @@ async def test_offload_reload_value(debug: bool = False):
     conversation.append(AgentHistory(role="user", content=t2))
     conversation.append(AgentHistory(role="assistant", content=r2.final_answer))
 
-    # ── Turn 3: 无关 filler，验证 reload 输出未被重复 offload ──
+    # -- Turn 3: unrelated filler, verify reload output not re-offloaded --
     t3 = "谢谢你的回答。请再确认一下你的系统是否正常工作。"
+    store = shared_cm.offload_store
     store_before_t3 = len(store)
     print(f"\n[Turn 3] filler（检查 inventory 是否含多余 handle）...")
     print(f"         store before: {store_before_t3} entries")
@@ -158,11 +163,11 @@ async def test_offload_reload_value(debug: bool = False):
     for h, d in active_t3:
         print(f"           handle={h[:8]}... desc={d[:80]}...")
 
-    # 验证：Turn 2 的 reload 输出不应该产生新的 offload 条目
+    # Verify: Turn 2's reload output should not produce new offload entries
     duplicate_free = store_after_t3 == store_before_t3
     print(f"         no duplicate from reload: {'✓' if duplicate_free else '✗ (多了 ' + str(store_after_t3 - store_before_t3) + ' 条)'}")
 
-    # ── 验证 ──
+    # -- Final verification --
     print(f"\n{'=' * 60}")
     print(f"offload: store={len(store)} entries")
     print(f"reload:  hits={store.reload_hits} misses={store.reload_misses}")

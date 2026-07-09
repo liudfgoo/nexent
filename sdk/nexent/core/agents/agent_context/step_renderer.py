@@ -45,29 +45,49 @@ class StepRenderer:
         text = _extract_text_from_messages(msgs) or ""
         if not self._offload_store:
             return text
-        # Offload oversized observation segments
+        # Offload oversized observation segments.  When _raw_observation
+        # is present (preserved before truncation in core_agent), use its
+        # length for the offload decision so truncated observations still
+        # trigger offload when the original content exceeds the threshold.
         threshold = self.config.max_memory_step_length
         observation = getattr(action, "observations", None)
-        if observation and len(observation) > threshold:
-            archived = self._render_segment(observation, "observation", threshold)
+        raw_obs = getattr(action, '_raw_observation', None)
+        obs_source = raw_obs if raw_obs is not None else observation
+        if obs_source and len(obs_source) > threshold:
+            archived = self._render_segment(observation, action, threshold)
             text = text.replace(observation, archived, 1) if observation in text else text
         # Offload oversized model_output segments
         model_output = getattr(action, "model_output", None)
         if model_output and len(model_output) > threshold:
-            archived = self._render_segment(model_output, "model_output", threshold)
+            archived = self._render_segment(model_output, action, threshold)
             text = text.replace(model_output, archived, 1) if model_output in text else text
         return text
 
-    def _render_segment(self, text: str, segment_type: str, threshold: int) -> str:
-        """Offload oversized text to the store, replacing it with a handle marker."""
-        if not text or not self._offload_store or len(text) <= threshold:
+    def _render_segment(self, text: str, action: ActionStep, threshold: int) -> str:
+        """Offload oversized text to the store, replacing it with a handle marker.
+
+        When the observation was truncated by ``max_observation_length`` in
+        ``core_agent._execute_code_action``, the original full content is
+        preserved in ``action._raw_observation``.  This method uses the raw
+        content for the offload decision and archiving so that ``reload``
+        can retrieve the truly original content rather than the truncated
+        version.
+        """
+        # Determine the source text for offload decisions and archiving.
+        # If the observation was truncated and _raw_observation was saved,
+        # use the original content for the offload decision and store.
+        source_text = text
+        if text.startswith("Observation:") and hasattr(action, '_raw_observation'):
+            source_text = action._raw_observation
+        if not source_text or not self._offload_store or len(source_text) <= threshold:
             return text
         # Skip already-reloaded content (contains the offloaded data inline)
-        if "OFFLOAD:" in text[:300]:
+        if '"offload_handle"' in source_text[:300]:
             return text
-        handle = self._offload_store.store(text, description=text[:120])
+        seg_label = "observation" if text.startswith("Observation:") else "model_output"
+        handle = self._offload_store.store(source_text, description=source_text[:120])
         if handle:
-            return f"[[OFFLOAD:handle={handle}]] (archived {segment_type}, {len(text)} chars)"
+            return f"[[OFFLOAD:handle={handle}]] (archived {seg_label}, {len(source_text)} chars)"
         # Fallback: truncate if store cannot accept
         return self._truncate_text(text, threshold)
 

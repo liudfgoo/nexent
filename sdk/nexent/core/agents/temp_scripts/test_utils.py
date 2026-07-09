@@ -248,7 +248,7 @@ def build_agent_run_info(
     # so the LLM sees its name / description / inputs natively through the
     # YAML template's normal tool-rendering loop.
     display_tools = list(tools)
-    if context_manager_config and context_manager_config.enable_reload:
+    if context_manager_config and context_manager_config.offload_enabled:
         display_tools.append(ToolConfig(
             class_name="ReloadOriginalContextTool",
             name="reload_original_context_messages",
@@ -263,32 +263,64 @@ def build_agent_run_info(
             source="local",
         ))
 
-    if duty or constraint or few_shots:
-        system_prompt = build_system_prompt(
+    # When the managed context runtime is active, build piecewise components
+    # (matching the production path in create_agent_info.py) so that
+    # stable_messages is populated and the system prompt survives
+    # _without_leading_stable_messages.  Legacy Jinja2 rendering is only used
+    # for the LegacyContextRuntime fallback.
+    cm_enabled = context_manager_config and context_manager_config.enabled
+    context_components = []
+
+    if cm_enabled:
+        from utils.context_utils import build_context_components as _build_ctx_comps
+
+        tools_dict = {tool.name: tool for tool in display_tools}
+        context_components = _build_ctx_comps(
             duty=duty,
             constraint=constraint,
             few_shots=few_shots,
-            tools=display_tools,
-            managed_agents=managed_agents,
-            memory_list=[],
-            knowledge_base_summary="",
+            app_name=APP_NAME,
+            app_description=APP_DESCRIPTION,
+            user_id=user_id,
             language=language,
             is_manager=is_manager,
-            user_id=user_id,
-            skills=skills
+            tools=tools_dict,
+            skills=skills or [],
+            managed_agents={a.name: a for a in managed_agents},
+            external_a2a_agents={},
+            memory_list=[],
+            knowledge_base_summary="",
         )
+        # Managed path: system_prompt in prompt_templates is empty (the
+        # runtime reads components instead).  Fallback is still set via
+        # CoreAgent.system_prompt for the first-step bootstrapping.
+        system_prompt = ""
     else:
-        system_prompt = fallback
-    
+        if duty or constraint or few_shots:
+            system_prompt = build_system_prompt(
+                duty=duty,
+                constraint=constraint,
+                few_shots=few_shots,
+                tools=display_tools,
+                managed_agents=managed_agents,
+                memory_list=[],
+                knowledge_base_summary="",
+                language=language,
+                is_manager=is_manager,
+                user_id=user_id,
+                skills=skills
+            )
+        else:
+            system_prompt = fallback
+
     prompt_templates = build_prompt_templates(
-        system_prompt, 
+        system_prompt,
         language=language,
         is_manager=is_manager
     )
 
     # 设置上下文管理器配置
-    cm_config = context_manager_config 
-    
+    cm_config = context_manager_config
 
     agent_config = AgentConfig(
         name=agent_name,
@@ -299,6 +331,7 @@ def build_agent_run_info(
         prompt_templates=prompt_templates,
         managed_agents=managed_agents,
         context_manager_config=cm_config,
+        context_components=context_components if cm_enabled else None,
     )
     
 

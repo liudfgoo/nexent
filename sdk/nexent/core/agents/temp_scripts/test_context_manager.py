@@ -2,7 +2,8 @@ import asyncio
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _SCRIPT_DIR)
 
 from test_utils import (
     build_agent_run_info,
@@ -89,7 +90,7 @@ async def run_multi_turn(
 # P1: 首次压缩且首次压缩后，后续命中[New的一步或多步]
 async def test_p1_first_comp_and_sub_new_run_hit():
     """Previous Run 压缩开启（opt）——基于 history.md 的 3 轮对话。"""
-    agent_history = parse_conversation_to_history("./small_history.md")
+    agent_history = parse_conversation_to_history(_HISTORY_MD)
     cm_config = ContextManagerConfig(
         enabled=True, token_threshold=9000, keep_recent_pairs=1
     )
@@ -111,7 +112,7 @@ async def test_p1_first_comp_and_sub_new_run_hit():
 # P2: 增量压缩：先后两次压缩，且合理命中
 async def test_p2_inc_comp_and_hit_valid():
     """Previous Run 压缩开启（opt）——基于 history.md 的 3 轮对话。"""
-    agent_history = parse_conversation_to_history("./small_history.md")
+    agent_history = parse_conversation_to_history(_HISTORY_MD)
     # import pdb; pdb.set_trace()
     cm_config = ContextManagerConfig(
         enabled=True, token_threshold=3600, keep_recent_pairs=1
@@ -134,7 +135,7 @@ async def test_p2_inc_comp_and_hit_valid():
 
 async def test_previous_run_overflow_baseline():
     """Previous Run 压缩禁用（baseline）——与 opt 做对照。"""
-    agent_history = parse_conversation_to_history("./small_history.md")
+    agent_history = parse_conversation_to_history(_HISTORY_MD)
     cm_config = ContextManagerConfig(
         enabled=False, token_threshold=10000, keep_recent_pairs=1
     )
@@ -154,7 +155,7 @@ async def test_previous_run_overflow_baseline():
 
 async def test_current_run_complex_baseline():
     """Current Run 压缩禁用（baseline）——复杂多步问题。"""
-    base_history = parse_conversation_to_history("./small_history.md")
+    base_history = parse_conversation_to_history(_HISTORY_MD)
     cm_config = ContextManagerConfig(
         enabled=False,
         token_threshold=800,
@@ -173,7 +174,7 @@ async def test_current_run_complex_baseline():
 
 async def test_current_run_complex_opt():
     """Current Run 压缩开启（opt）——同上复杂问题，断言发生压缩。"""
-    base_history = parse_conversation_to_history("./small_history.md")
+    base_history = parse_conversation_to_history(_HISTORY_MD)
     cm_config = ContextManagerConfig(
         enabled=True,
         token_threshold=3800,
@@ -192,7 +193,7 @@ async def test_current_run_complex_opt():
 
 async def test_current_run_complex_followup():
     """Current Run 压缩开启——两轮复杂任务，验证缓存复用。"""
-    base_history = parse_conversation_to_history("./small_history.md")
+    base_history = parse_conversation_to_history(_HISTORY_MD)
     cm_config = ContextManagerConfig(
         enabled=True,
         token_threshold=800,
@@ -217,11 +218,13 @@ async def test_current_run_complex_followup():
 # 主入口：可按需选择运行
 # =============================================================================
 
+_HISTORY_MD = os.path.join(_SCRIPT_DIR, "small_history.md")
+
 if __name__ == "__main__":
-    # get the esitmated tokens of the provided history
-    with open("./small_history.md", "r", encoding="utf-8") as f:
+    # get the estimated tokens of the provided history
+    with open(_HISTORY_MD, "r", encoding="utf-8") as f:
         tmp = f.read()
-    print("Esimated Tokens of small history: ", estimate_tokens_text(tmp))
+    print("Estimated Tokens of small history: ", estimate_tokens_text(tmp))
 
 
     # 2. Current Run 系列

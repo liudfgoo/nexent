@@ -6,6 +6,8 @@ from typing import List
 
 logger = logging.getLogger("code_analysis")
 
+_MAX_SUMMARY_FIRST_LINE = 120
+
 
 def extract_invoked_tools(code_action: str, registered_tools: dict) -> List[str]:
     """Extract registered tool names called in code_action via AST analysis.
@@ -103,3 +105,39 @@ def extract_invoked_tool_signatures(
             seen.add(sig)
             signatures.append(sig)
     return signatures
+
+
+def summarize_pure_python(code_action: str) -> str:
+    """Produce a compact, readable summary for pure-Python code_action.
+
+    When ``extract_invoked_tool_signatures`` finds no registered-tool calls,
+    the code consists solely of built-in Python (loops, math, print, etc.).
+    Showing a ``truncate_content(code, 100)`` fragment yields broken syntax
+    that confuses the LLM.  Instead we return the first meaningful line
+    (comment or statement) plus a line-count hint so the model understands
+    *what* was executed without seeing the full source.
+
+    Examples::
+
+        >>> summarize_pure_python("# compute squares\\nfor i in range(10):\\n    print(i**2)")
+        '# compute squares … (3 lines)'
+
+        >>> summarize_pure_python("results = {}\\nfor i in range(10, 16):\\n    results[i] = 2 ** i")
+        'results = {} … (3 lines)'
+    """
+    if not code_action or not code_action.strip():
+        return "<empty code block>"
+    lines = code_action.strip().splitlines()
+    first_line = ""
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            first_line = stripped
+            break
+    if not first_line:
+        return "<empty code block>"
+    if len(first_line) > _MAX_SUMMARY_FIRST_LINE:
+        first_line = first_line[:_MAX_SUMMARY_FIRST_LINE] + "…"
+    total = len(lines)
+    suffix = f" … ({total} lines)" if total > 1 else ""
+    return first_line + suffix

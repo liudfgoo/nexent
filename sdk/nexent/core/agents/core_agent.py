@@ -31,7 +31,7 @@ from .agent_model import AgentVerificationConfig
 from ..context_runtime.contracts import ContextRuntime, UnconfiguredContextRuntime
 from .verification import VerificationController, VerificationResult
 from ..utils.token_estimation import msg_token_count
-from ..utils.code_analysis import extract_invoked_tool_signatures
+from ..utils.code_analysis import extract_invoked_tool_signatures, summarize_pure_python
 
 if not hasattr(ActionStep, "invoked_tool_signatures"):
     ActionStep.invoked_tool_signatures = None
@@ -216,11 +216,32 @@ class CoreAgent(CodeAgent):
         )
         self.step_metrics: List[dict] = []  # Quantitative metrics per step
         self._last_uncompressed_est = 0
+        self._ephemeral_system_messages: Optional[List[ChatMessage]] = None
+        """Per-run system messages injected before the current user query.
+
+        Set via ``set_ephemeral_messages()`` before ``run()`` and automatically
+        prepended to ``input_messages`` in ``_step_stream()`` right before the
+        last USER message (the current query). These messages are NOT stored in
+        ``memory.steps`` and therefore do not persist into conversation history
+        or compression. Cleared via ``clear_ephemeral_messages()``.
+        """
         # Override smolagent default to prevent extracting ```python blocks from KB content.
         # code_block_tags[0] and [1] are used by the system prompt template for opening/closing
         # tags (e.g., ``` and ```). extract_code_from_text iterates all tags as language
         # identifiers; omitting "python" and "py" ensures ```python blocks are not extracted.
         self.code_block_tags = ["", ""]
+
+    def set_ephemeral_messages(self, messages: List[ChatMessage]) -> None:
+        """Set per-run system messages injected before the current user query.
+
+        These are prepended to ``input_messages`` in ``_step_stream()`` right
+        before the last USER message and are NOT stored in ``memory.steps``.
+        """
+        self._ephemeral_system_messages = messages
+
+    def clear_ephemeral_messages(self) -> None:
+        """Clear ephemeral system messages after the run completes."""
+        self._ephemeral_system_messages = None
 
     def _verification_tool_names(self) -> List[str]:
         names = set()
@@ -394,6 +415,21 @@ Additional Args:
             self._last_uncompressed_est = uncompressed_tokens
         else:
             self._last_uncompressed_est = msg_token_count(input_messages, chars_per_token)
+        # Inject ephemeral system messages before the last USER message
+        # (the current query), maximizing prompt cache prefix reuse: the
+        # system prompt and all history messages stay at the same positions.
+        if self._ephemeral_system_messages:
+            insert_at = len(input_messages)
+            for i in range(len(input_messages) - 1, -1, -1):
+                if input_messages[i].role == "user":
+                    insert_at = i
+                    break
+            input_messages = (
+                input_messages[:insert_at]
+                + self._ephemeral_system_messages
+                + input_messages[insert_at:]
+            )
+
         # Add new step in logs
         memory_step.model_input_messages = input_messages
         stop_sequences = ["Observation:", "Calling tools:"]
@@ -468,7 +504,7 @@ Additional Args:
             compact_arguments = (
                 "\n".join(memory_step.invoked_tool_signatures)
                 if memory_step.invoked_tool_signatures
-                else truncate_content(code_action, max_length=100)
+                else summarize_pure_python(code_action)
             )
         else:
             compact_arguments = code_action
@@ -564,6 +600,27 @@ Additional Args:
                 )
             if postcheck.severity == "warning":
                 self._append_verification_feedback(memory_step, postcheck)
+
+        # Save raw observation for offload before truncation.
+        # When max_observation_length truncates the observation, downstream
+        # compression would never see content exceeding max_memory_step_length,
+        # so offload could never trigger.  Preserving the original content in
+        # _raw_observation lets StepRenderer._render_segment archive the full
+        # text when the truncated version falls below the offload threshold.
+        ctx_cfg = self.context_manager.config if self.context_manager else None
+        needs_raw = (
+            ctx_cfg
+            and ctx_cfg.offload_enabled
+            and ctx_cfg.max_memory_step_length > 0
+            and ctx_cfg.max_observation_length > 0
+            and len(observation) > ctx_cfg.max_observation_length
+        )
+        if needs_raw:
+            raw_limit = getattr(ctx_cfg, 'max_offload_entry_chars', 30000)
+            if len(observation) > raw_limit:
+                memory_step._raw_observation = observation[:raw_limit] + "\n...[RAW_TRUNCATED]"
+            else:
+                memory_step._raw_observation = observation
 
         # Pre-truncate observations when ContextManager is enabled. Keeps the
         # head + tail of long outputs around a truncation marker so downstream

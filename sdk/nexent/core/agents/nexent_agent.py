@@ -9,6 +9,7 @@ from threading import Event
 from typing import Any, Callable, Dict, List
 
 from smolagents import ActionStep, AgentText, TaskStep, Timing
+from smolagents.models import ChatMessage, MessageRole
 from smolagents.tools import Tool
 
 from ...monitor import AgentRunMetadata, get_agent_monitoring_context, get_monitoring_manager
@@ -532,6 +533,38 @@ class NexentAgent:
                                                           action_output=msg.content, model_output=msg.content))
 
         self.agent._history_step_count = len(self.agent.memory.steps)
+
+    def _build_reloadable_archives_messages(self, query: str = "") -> List[ChatMessage]:
+        """Build ephemeral ChatMessages listing reloadable offload archives.
+
+        Uses ``OffloadStore.build_reload_inventory()`` and wraps the result
+        in a SYSTEM-role ChatMessage. Returns an empty list when there is nothing
+        to list or reload is disabled.
+
+        When ``query`` is non-empty, entries are scored by keyword overlap
+        with the query so only relevant handles are shown.
+
+        The returned messages are injected as ephemeral system messages on the
+        agent: they are prepended right before the current user query in
+        ``_step_stream`` and do NOT persist in ``memory.steps``, so they never
+        become part of the conversation history or compression.
+        """
+
+        ctx_mgr = getattr(self.agent, "context_manager", None)
+        if ctx_mgr is None:
+            return []
+        store = getattr(ctx_mgr, "offload_store", None)
+        if store is None:
+            return []
+        offload_enabled = getattr(ctx_mgr.config, "offload_enabled", False)
+        text = store.build_reload_inventory(offload_enabled, query=query)
+        if not text:
+            return []
+        return [ChatMessage(
+            role=MessageRole.SYSTEM,
+            content=[{"type": "text", "text": text}],
+        )]
+
     def agent_run_with_observer(self, query: str, reset=True):
         if not isinstance(self.agent, CoreAgent):
             raise TypeError(f"agent must be a CoreAgent object, not {type(self.agent)}")
@@ -546,6 +579,13 @@ class NexentAgent:
         observer = self.agent.observer
         total_output_tokens = 0
         final_answer_for_trace = None
+        # Set ephemeral system messages for reloadable archive inventory.
+        # These are injected right before the current user query in
+        # _step_stream and do NOT persist in memory.steps.
+        # import pdb; pdb.set_trace()
+        ephemeral_msgs = self._build_reloadable_archives_messages(query=query)
+        if ephemeral_msgs:
+            self.agent.set_ephemeral_messages(ephemeral_msgs)
         with monitoring_manager.start_agent_run(metadata):
             with monitoring_manager.trace_agent_step(
                 "agent.run.loop",
@@ -625,6 +665,8 @@ class NexentAgent:
                     raise ValueError(f"Error in interaction: {str(e)}")
 
                 finally:
+                    if ephemeral_msgs:
+                        self.agent.clear_ephemeral_messages()
                     self._log_step_metrics()
 
             if final_answer_for_trace is not None:
@@ -721,6 +763,7 @@ class NexentAgent:
             "-----"
         )
         logger.debug("\n".join(lines))
+        print("\n".join(lines))
 
         # Optional: write to local file
         with open("nexent_context_metrics.log", "a", encoding="utf-8") as f:
