@@ -70,7 +70,7 @@ class ContextManager:
         self.compression_calls_log: List[CompressionCallRecord] = []
         self._step_local_log: List[CompressionCallRecord] = []
         self._lock = threading.Lock()
-        self._offload_store = offload_store or OffloadStore(
+        self._offload_store = offload_store if offload_store is not None else OffloadStore(
             max_entries=self.config.max_offload_entries,
             max_entry_chars=self.config.max_offload_entry_chars,
             max_total_chars=self.config.max_offload_total_chars,
