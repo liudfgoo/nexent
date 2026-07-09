@@ -31,7 +31,7 @@ from .agent_model import AgentVerificationConfig
 from ..context_runtime.contracts import ContextRuntime, UnconfiguredContextRuntime
 from .verification import VerificationController, VerificationResult
 from ..utils.token_estimation import msg_token_count
-from ..utils.code_analysis import extract_invoked_tools, extract_invoked_tool_signatures
+from ..utils.code_analysis import extract_invoked_tool_signatures
 
 if not hasattr(ActionStep, "invoked_tool_signatures"):
     ActionStep.invoked_tool_signatures = None

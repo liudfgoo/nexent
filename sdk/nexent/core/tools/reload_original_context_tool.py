@@ -13,6 +13,13 @@ class ReloadOriginalContextTool(Tool):
     is offloaded to an in-memory store and replaced with [[OFFLOAD:handle=...]]
     markers. The agent can call this tool to recover the full original content
     when detailed information from earlier steps is needed.
+
+    TODO(wiring): The tool description tells the agent to look for a "system
+    notice" listing available handles, but nothing in the context-assembly path
+    currently injects such a notice. The agent can still discover handles from
+    the [[OFFLOAD:handle=...]] markers in compressed text, so reloading works
+    without the notice — but wiring build_reload_inventory() into the context
+    assembly path (e.g. step_renderer.build_messages) would improve UX.
     """
     name = "reload_original_context_messages"
     description = (

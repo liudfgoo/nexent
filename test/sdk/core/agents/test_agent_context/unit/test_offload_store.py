@@ -38,7 +38,7 @@ class TestOffloadStoreBasic:
         h1 = store.store("content1", "desc1")
         h2 = store.store("content2", "desc2")
         active = store.list_active()
-        handles = [h for h, _ in active]
+        handles = [h for h, _, _ in active]
         assert h1 in handles
         assert h2 in handles
 

@@ -34,8 +34,8 @@ class OffloadStore:
 
     Each entry keeps the original ``content`` and a short ``description``.
     The store is the single source of truth for "what can currently be
-    reloaded": ``list_active()`` returns exactly the (handle, description)
-    pairs for which ``reload(handle)`` is guaranteed to succeed right now
+    reloaded": ``list_active()`` returns exactly the (handle, description,
+    tokens) triples for which ``reload(handle)`` is guaranteed to succeed right now
     (i.e. evicted entries never appear). This is what lets a fresh run
     re-list reloadable archives without relying on handles surviving
     inside compressed/summarized conversation history.
@@ -98,15 +98,18 @@ class OffloadStore:
             self._reload_hits += 1
             return entry.content
 
-    def list_active(self) -> List[Tuple[str, str]]:
-        """Return (handle, description) for every entry currently reloadable.
+    def list_active(self) -> List[Tuple[str, str, set]]:
+        """Return (handle, description, tokens) for every entry currently reloadable.
 
         The returned set is exactly the handles for which ``reload`` would
-        succeed right now: evicted entries are absent. Callers can render
-        this into a per-run, ephemeral inventory of reloadable archives.
+        succeed right now: evicted entries are absent. Tokens are bundled
+        into the snapshot so callers (e.g. build_reload_inventory) never
+        need to re-access ``self._store[handle]`` outside the lock, which
+        would be a thread-safety hazard (another thread could evict the
+        handle between list_active() and the subsequent lookup).
         """
         with self._lock:
-            return [(h, e.description) for h, e in self._store.items()]
+            return [(h, e.description, e.tokens) for h, e in self._store.items()]
 
     # Common English stop words filtered during tokenization to reduce
     # spurious partial matches from high-frequency short tokens like "in",
@@ -198,6 +201,13 @@ class OffloadStore:
     ) -> Optional[str]:
         """Build a per-run inventory listing reloadable archives.
 
+        TODO(wiring): This method builds the inventory text, but nothing in
+        the context-assembly path currently injects it as a system notice.
+        The agent can still discover handles from the ``[[OFFLOAD:handle=...]]``
+        markers in compressed text, so reloading works — but the UX would be
+        improved if this inventory were prepended as a system message in
+        ContextManager.assemble_final_context() or step_renderer.build_messages().
+
         When ``query`` is provided, entries are scored by keyword overlap
         and sorted by relevance (highest first), capped at ``max_items``.
         Entries with zero overlap are dropped so the LLM only sees items
@@ -225,13 +235,13 @@ class OffloadStore:
         if query:
             query_tokens = self._tokenize(query)
             if query_tokens:
-                scored = [
-                    (handle, desc, self._score_description(
-                        self._store[handle].tokens, query_tokens))
-                    for handle, desc in active
-                ]
-                scored.sort(key=lambda x: x[2], reverse=True)
-                matching = [(h, d) for h, d, s in scored if s > 0]
+                # Score using tokens from the snapshot (no post-lock store access)
+                scored_triples = sorted(
+                    [(handle, desc, entry_tokens, self._score_description(entry_tokens, query_tokens))
+                     for handle, desc, entry_tokens in active],
+                    key=lambda x: x[3], reverse=True,
+                )
+                matching = [(h, d, t) for h, d, t, s in scored_triples if s > 0]
                 if matching:
                     active = matching[:max_items]
                 else:
@@ -242,7 +252,7 @@ class OffloadStore:
 
         lines = [
             f"- handle={handle}: {description}"
-            for handle, description in active
+            for handle, description, _ in active
         ]
         return (
             "[System Notice - Not User Input] The following content was archived "

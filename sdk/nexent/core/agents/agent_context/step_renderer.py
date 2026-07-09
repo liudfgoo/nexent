@@ -51,6 +51,11 @@ class StepRenderer:
         if observation and len(observation) > threshold:
             archived = self._render_segment(observation, "observation", threshold)
             text = text.replace(observation, archived, 1) if observation in text else text
+        # Offload oversized model_output segments
+        model_output = getattr(action, "model_output", None)
+        if model_output and len(model_output) > threshold:
+            archived = self._render_segment(model_output, "model_output", threshold)
+            text = text.replace(model_output, archived, 1) if model_output in text else text
         return text
 
     def _render_segment(self, text: str, segment_type: str, threshold: int) -> str:
@@ -58,7 +63,7 @@ class StepRenderer:
         if not text or not self._offload_store or len(text) <= threshold:
             return text
         # Skip already-reloaded content (contains the offloaded data inline)
-        if "offload_handle" in text[:300]:
+        if "OFFLOAD:" in text[:300]:
             return text
         handle = self._offload_store.store(text, description=text[:120])
         if handle:
