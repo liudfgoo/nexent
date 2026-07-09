@@ -121,3 +121,16 @@ class ContextManagerConfig:
     # === NEW: Buffered Strategy Settings ===
     buffer_size_per_component: int = 10
     """Number of items to keep per component type for 'buffered' strategy."""
+
+    # === Offload Settings ===
+    offload_enabled: bool = True
+    """Whether to archive oversized step content for on-demand retrieval."""
+
+    max_offload_entries: int = 200
+    """Maximum number of offloaded entries in the store."""
+
+    max_offload_entry_chars: int = 30000
+    """Maximum character length of a single offloaded entry."""
+
+    max_offload_total_chars: int = 2_000_000
+    """Maximum total character budget for all offloaded entries."""

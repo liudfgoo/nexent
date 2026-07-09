@@ -8,6 +8,7 @@ from .manager import ContextManager
 from .summary_step import SummaryTaskStep, ManagedRunContext
 from .budget import format_summary_output, _is_context_length_error
 from .step_renderer import compress_history_offline
+from .offload_store import OffloadStore
 
 # Re-export types from sibling modules so that
 # ``from agent_context import ContextManagerConfig`` still works.
@@ -21,6 +22,7 @@ __all__ = [
     "format_summary_output",
     "_is_context_length_error",
     "compress_history_offline",
+    "OffloadStore",
     "ContextManagerConfig",
     "CompressionCallRecord",
     "PreviousSummaryCache",

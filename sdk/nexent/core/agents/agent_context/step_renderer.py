@@ -33,8 +33,9 @@ logger = logging.getLogger("agent_context.step_renderer")
 class StepRenderer:
     """Renders memory steps to text and assembles chat messages with budget-aware truncation."""
 
-    def __init__(self, config: ContextManagerConfig):
+    def __init__(self, config: ContextManagerConfig, offload_store=None):
         self.config = config
+        self._offload_store = offload_store
 
     # ── Core rendering ──────────────────────────────────────────
 

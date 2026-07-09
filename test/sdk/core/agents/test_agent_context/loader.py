@@ -343,6 +343,7 @@ _load_file_module(f"{_AC_PREFIX}.llm_summary",           _ac_file("llm_summary.p
 _load_file_module(f"{_AC_PREFIX}.previous_compression",  _ac_file("previous_compression.py"),  _AC_PKG)
 _load_file_module(f"{_AC_PREFIX}.current_compression",   _ac_file("current_compression.py"),   _AC_PKG)
 _load_file_module(f"{_AC_PREFIX}.stats_export",          _ac_file("stats_export.py"),          _AC_PKG)
+_load_file_module(f"{_AC_PREFIX}.offload_store",         _ac_file("offload_store.py"),         _AC_PKG)
 
 # Manager depends on all above
 _load_file_module(f"{_AC_PREFIX}.manager", _ac_file("manager.py"), _AC_PKG)
@@ -362,6 +363,7 @@ _ctx_mod.SummaryTaskStep       = sys.modules[f"{_AC_PREFIX}.summary_step"].Summa
 _ctx_mod.format_summary_output = sys.modules[f"{_AC_PREFIX}.budget"].format_summary_output
 _ctx_mod._is_context_length_error = sys.modules[f"{_AC_PREFIX}.budget"]._is_context_length_error
 _ctx_mod.compress_history_offline = sys.modules[f"{_AC_PREFIX}.step_renderer"].compress_history_offline
+_ctx_mod.OffloadStore         = sys.modules[f"{_AC_PREFIX}.offload_store"].OffloadStore
 sys.modules[_AC_PREFIX] = _ctx_mod
 
 
@@ -395,6 +397,7 @@ from sdk.nexent.core.utils.token_estimation import (
     estimate_tokens_for_system_prompt, msg_token_count, msg_char_count,
 )
 from sdk.nexent.core.agents.agent_context.step_renderer import StepRenderer, compress_history_offline
+from sdk.nexent.core.agents.agent_context.offload_store import OffloadStore
 from sdk.nexent.core.agents.agent_context.llm_summary import LLMSummary, SummaryResult
 from sdk.nexent.core.agents.agent_context.previous_compression import PreviousCompressor, PreviousCompressResult
 from sdk.nexent.core.agents.agent_context.current_compression import CurrentCompressor, CurrentCompressResult
