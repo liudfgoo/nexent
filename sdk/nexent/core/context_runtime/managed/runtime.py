@@ -13,15 +13,25 @@ from ..contracts import FinalContext
 class ManagedContextRuntime:
     """Adapter for the ContextManager-owned managed path."""
 
-    def __init__(self, context_manager: Any, components: Sequence[Any] | None = None):
+    def __init__(self, context_manager: Any, components: Sequence[Any] | None = None, offload_store: Any = None):
         self.context_manager = context_manager
         self.components = list(components or ())
         self._run_context = None
+        self._offload_store = offload_store  # session-scoped
+        # Wire the store into the context_manager and its renderer
+        if offload_store is not None:
+            context_manager._offload_store = offload_store
+            if hasattr(context_manager, '_renderer') and context_manager._renderer is not None:
+                context_manager._renderer._offload_store = offload_store
 
     def replace_components(self, components: Sequence[Any] | None) -> None:
         """Replace this runtime's run-local component snapshot."""
         self.components = list(components or ())
         self._run_context = None
+
+    @property
+    def offload_store(self):
+        return self._offload_store
 
     def prepare_run(self, *, memory: Any, fallback_system_prompt: str) -> None:
         self._run_context = self.context_manager.prepare_run_context(

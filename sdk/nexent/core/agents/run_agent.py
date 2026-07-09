@@ -84,6 +84,15 @@ def _mount_conversation_context_manager(agent: Any, agent_run_info: AgentRunInfo
         )
     agent.context_manager = context_manager
 
+    # Rebind the reload tool and renderer to the new CM's session-scoped store
+    if hasattr(context_runtime, '_offload_store') and context_runtime._offload_store is not None:
+        context_manager._offload_store = context_runtime._offload_store
+        if hasattr(context_manager, '_renderer') and context_manager._renderer is not None:
+            context_manager._renderer._offload_store = context_runtime._offload_store
+    if 'reload_original_context_messages' in agent.tools:
+        agent.tools['reload_original_context_messages']._offload_store = \
+            context_manager.offload_store
+
 
 def _detect_transport(url: str) -> str:
     """

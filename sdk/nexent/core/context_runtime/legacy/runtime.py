@@ -13,6 +13,7 @@ class LegacyContextRuntime:
     """Fallback path deliberately independent from ContextManager and W3."""
 
     context_manager = None
+    offload_store = None
 
     def prepare_run(self, *, memory: Any, fallback_system_prompt: str) -> None:
         from smolagents.memory import SystemPromptStep
