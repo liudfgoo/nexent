@@ -33,15 +33,43 @@ logger = logging.getLogger("agent_context.step_renderer")
 class StepRenderer:
     """Renders memory steps to text and assembles chat messages with budget-aware truncation."""
 
-    def __init__(self, config: ContextManagerConfig):
+    def __init__(self, config: ContextManagerConfig, offload_store=None):
         self.config = config
+        self._offload_store = offload_store
 
     # ── Core rendering ──────────────────────────────────────────
 
     def render_action_step(self, action: ActionStep) -> str:
-        """Render an ActionStep to plain text."""
+        """Render an ActionStep to plain text, offloading oversized segments."""
         msgs = action.to_messages(summary_mode=False)
-        return _extract_text_from_messages(msgs) or ""
+        text = _extract_text_from_messages(msgs) or ""
+        if not self._offload_store:
+            return text
+        # Offload oversized observation segments
+        threshold = self.config.max_memory_step_length
+        observation = getattr(action, "observations", None)
+        if observation and len(observation) > threshold:
+            archived = self._render_segment(observation, "observation", threshold)
+            text = text.replace(observation, archived, 1) if observation in text else text
+        # Offload oversized model_output segments
+        model_output = getattr(action, "model_output", None)
+        if model_output and len(model_output) > threshold:
+            archived = self._render_segment(model_output, "model_output", threshold)
+            text = text.replace(model_output, archived, 1) if model_output in text else text
+        return text
+
+    def _render_segment(self, text: str, segment_type: str, threshold: int) -> str:
+        """Offload oversized text to the store, replacing it with a handle marker."""
+        if not text or not self._offload_store or len(text) <= threshold:
+            return text
+        # Skip already-reloaded content (contains the offloaded data inline)
+        if "OFFLOAD:" in text[:300]:
+            return text
+        handle = self._offload_store.store(text, description=text[:120])
+        if handle:
+            return f"[[OFFLOAD:handle={handle}]] (archived {segment_type}, {len(text)} chars)"
+        # Fallback: truncate if store cannot accept
+        return self._truncate_text(text, threshold)
 
     def pairs_to_text(self, pairs: List[tuple]) -> str:
         """Render (TaskStep, ActionStep) pairs as user/assistant text."""

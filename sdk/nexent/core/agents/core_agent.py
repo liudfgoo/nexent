@@ -31,6 +31,10 @@ from .agent_model import AgentVerificationConfig
 from ..context_runtime.contracts import ContextRuntime, UnconfiguredContextRuntime
 from .verification import VerificationController, VerificationResult
 from ..utils.token_estimation import msg_token_count
+from ..utils.code_analysis import extract_invoked_tool_signatures
+
+if not hasattr(ActionStep, "invoked_tool_signatures"):
+    ActionStep.invoked_tool_signatures = None
 
 def parse_code_blobs(text: str) -> str:
     """Extract code blocks from the LLM's output for execution.
@@ -452,9 +456,25 @@ Additional Args:
                 content=model_output, title="AGENT FINAL ANSWER", level=LogLevel.INFO)
             raise FinalAnswerError()
 
+        # The full code already lives in memory_step.model_output (<code> block)
+        # and memory_step.code_action. ActionStep.to_messages() would render the
+        # same code again in the TOOL_CALL message, roughly doubling the code
+        # portion of every step. Store compact call signatures in
+        # tool_call.arguments instead when context_manager is active.
+        if self.context_manager:
+            memory_step.invoked_tool_signatures = (
+                extract_invoked_tool_signatures(code_action, self.tools) if self.tools else []
+            )
+            compact_arguments = (
+                "\n".join(memory_step.invoked_tool_signatures)
+                if memory_step.invoked_tool_signatures
+                else truncate_content(code_action, max_length=100)
+            )
+        else:
+            compact_arguments = code_action
         tool_call = ToolCall(
             name="python_interpreter",
-            arguments=code_action,
+            arguments=compact_arguments,
             id=f"call_{len(self.memory.steps)}",
         )
         memory_step.tool_calls = [tool_call]

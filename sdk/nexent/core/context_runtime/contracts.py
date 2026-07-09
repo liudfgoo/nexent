@@ -31,6 +31,7 @@ class ContextRuntime(Protocol):
     """Runtime protocol; implementations must not depend on one another."""
 
     context_manager: Any | None
+    offload_store: Any | None
 
     def prepare_run(self, *, memory: Any, fallback_system_prompt: str) -> None:
         """Initialize the run's system state before a TaskStep is appended."""
@@ -79,6 +80,7 @@ class UnconfiguredContextRuntime:
     """Neutral guard used only when a caller bypasses the agent factory."""
 
     context_manager = None
+    offload_store = None
 
     def prepare_run(self, *, memory: Any, fallback_system_prompt: str) -> None:
         raise RuntimeError(_UNCONFIGURED_RUNTIME_ERROR)

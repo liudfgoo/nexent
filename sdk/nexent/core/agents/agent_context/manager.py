@@ -42,6 +42,7 @@ from .budget import (
 )
 from .current_compression import CurrentCompressor
 from .llm_summary import LLMSummary
+from .offload_store import OffloadStore
 from .previous_compression import PreviousCompressor
 from .stats_export import (
     export_summary as _export_summary,
@@ -56,7 +57,7 @@ logger = logging.getLogger("agent_context")
 
 
 class ContextManager:
-    def __init__(self, config: Optional[ContextManagerConfig] = None, max_steps: Optional[int] = None):
+    def __init__(self, config: Optional[ContextManagerConfig] = None, max_steps: Optional[int] = None, offload_store: Optional[OffloadStore] = None):
         self.config = config or ContextManagerConfig()
         self._previous_summary_cache: Optional[PreviousSummaryCache] = None
         self._current_summary_cache: Optional[CurrentSummaryCache] = None
@@ -69,6 +70,11 @@ class ContextManager:
         self.compression_calls_log: List[CompressionCallRecord] = []
         self._step_local_log: List[CompressionCallRecord] = []
         self._lock = threading.Lock()
+        self._offload_store = offload_store if offload_store is not None else OffloadStore(
+            max_entries=self.config.max_offload_entries,
+            max_entry_chars=self.config.max_offload_entry_chars,
+            max_total_chars=self.config.max_offload_total_chars,
+        )
 
         self._last_uncompressed_token_count: Optional[int] = None
         self._last_compressed_token_count: Optional[int] = None
@@ -84,10 +90,14 @@ class ContextManager:
         self._components: List = []
 
         # Compose sub-components
-        self._renderer = StepRenderer(self.config)
+        self._renderer = StepRenderer(self.config, self._offload_store)
         self._llm = LLMSummary(self.config, self._renderer)
         self._prev_compressor = PreviousCompressor(self.config, self._renderer, self._llm)
         self._curr_compressor = CurrentCompressor(self.config, self._renderer, self._llm)
+
+    @property
+    def offload_store(self) -> OffloadStore:
+        return self._offload_store
 
     # ============================================================
     #  Effective token estimation
@@ -171,6 +181,9 @@ class ContextManager:
             if (self._last_run_start_idx is not None
                     and current_run_start_idx != self._last_run_start_idx):
                 self._current_summary_cache = None
+                # The offload store is intentionally NOT cleared: it is
+                # session-scoped and owned externally, so archived content
+                # survives across runs within the same session.
             self._last_run_start_idx = current_run_start_idx
 
             if self._effective_tokens(memory, current_run_start_idx) <= soft_history_budget_tokens:

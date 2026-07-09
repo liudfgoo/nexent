@@ -409,6 +409,7 @@ class NexentAgent:
                 None,
             )
             prompt_templates = agent_config.prompt_templates
+            offload_store = None  # set inside managed context path if offload_enabled
 
             try:
                 tool_list = [
@@ -450,17 +451,32 @@ class NexentAgent:
             # legacy implementations do not call one another after this point.
             ctx_config = getattr(agent_config, 'context_manager_config', None)
             if ctx_config and ctx_config.enabled:
-                from .agent_context import ContextManager
+                from .agent_context import ContextManager, OffloadStore
                 from ..context_runtime.managed.runtime import ManagedContextRuntime
+                from ..tools.reload_original_context_tool import ReloadOriginalContextTool
+
+                offload_store = OffloadStore(
+                    max_entries=ctx_config.max_offload_entries,
+                    max_entry_chars=ctx_config.max_offload_entry_chars,
+                    max_total_chars=ctx_config.max_offload_total_chars,
+                ) if ctx_config.offload_enabled else None
 
                 context_manager = ContextManager(
                     config=ctx_config,
                     max_steps=agent_config.max_steps,
+                    offload_store=offload_store,
                 )
                 context_runtime = ManagedContextRuntime(
                     context_manager,
                     components=getattr(agent_config, 'context_components', None) or [],
+                    offload_store=offload_store,
                 )
+
+                # Register the reload tool when offload is enabled
+                if offload_store is not None:
+                    reload_tool = ReloadOriginalContextTool()
+                    reload_tool._offload_store = offload_store
+                    tool_list.append(reload_tool)
             else:
                 from ..context_runtime.legacy.runtime import LegacyContextRuntime
 
