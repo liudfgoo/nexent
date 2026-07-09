@@ -40,9 +40,31 @@ class StepRenderer:
     # ── Core rendering ──────────────────────────────────────────
 
     def render_action_step(self, action: ActionStep) -> str:
-        """Render an ActionStep to plain text."""
+        """Render an ActionStep to plain text, offloading oversized segments."""
         msgs = action.to_messages(summary_mode=False)
-        return _extract_text_from_messages(msgs) or ""
+        text = _extract_text_from_messages(msgs) or ""
+        if not self._offload_store:
+            return text
+        # Offload oversized observation segments
+        threshold = self.config.max_memory_step_length
+        observation = getattr(action, "observations", None)
+        if observation and len(observation) > threshold:
+            archived = self._render_segment(observation, "observation", threshold)
+            text = text.replace(observation, archived, 1) if observation in text else text
+        return text
+
+    def _render_segment(self, text: str, segment_type: str, threshold: int) -> str:
+        """Offload oversized text to the store, replacing it with a handle marker."""
+        if not text or not self._offload_store or len(text) <= threshold:
+            return text
+        # Skip already-reloaded content (contains the offloaded data inline)
+        if "offload_handle" in text[:300]:
+            return text
+        handle = self._offload_store.store(text, description=text[:120])
+        if handle:
+            return f"[[OFFLOAD:handle={handle}]] (archived {segment_type}, {len(text)} chars)"
+        # Fallback: truncate if store cannot accept
+        return self._truncate_text(text, threshold)
 
     def pairs_to_text(self, pairs: List[tuple]) -> str:
         """Render (TaskStep, ActionStep) pairs as user/assistant text."""
