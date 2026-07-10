@@ -418,6 +418,72 @@ def build_agent_run_info_with_custom_prompt(
     )
 
 
+# ============ YAML Tool Configuration ============
+
+# Tools that require runtime metadata injection (DB connections, model instances, etc.)
+# and cannot be fully reconstructed from YAML alone.
+_METADATA_REQUIRED_TOOLS = {
+    "KnowledgeBaseSearchTool",
+    "AnalyzeTextFileTool",
+    "AnalyzeImageTool",
+    "AnalyzeAudioTool",
+    "AnalyzeVideoTool",
+    "DifySearchTool",
+    "DataMateSearchTool",
+    "HaotianSearchTool",
+    "StoreMemoryTool",
+    "SearchMemoryTool",
+}
+
+
+def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
+    """Reconstruct ToolConfig objects from exported YAML tool entries.
+
+    Args:
+        tools_yaml: List of tool dicts from YAML 'tools' section.
+                    Each entry has: tool_name, tool_class, tool_source,
+                    tool_description, tool_params, enabled.
+
+    Returns:
+        List of ToolConfig objects ready for make_nexent_task(tools=...).
+        Skips disabled tools and metadata-required tools with a warning.
+    """
+    if not tools_yaml:
+        return []
+
+    tool_configs = []
+    skipped = []
+
+    for entry in tools_yaml:
+        if not entry.get("enabled", True):
+            continue
+
+        class_name = entry.get("tool_class", "")
+        tool_name = entry.get("tool_name", "")
+        source = entry.get("tool_source", "local")
+
+        if class_name in _METADATA_REQUIRED_TOOLS:
+            skipped.append(f"{tool_name} ({class_name})")
+            continue
+
+        tool_configs.append(ToolConfig(
+            class_name=class_name,
+            name=tool_name,
+            description=entry.get("tool_description", ""),
+            inputs=entry.get("tool_inputs"),
+            output_type=entry.get("tool_output_type"),
+            params=entry.get("tool_params", {}),
+            source=source,
+            usage=entry.get("tool_usage"),
+        ))
+
+    if skipped:
+        print(f"  WARNING: Skipped {len(skipped)} tools requiring runtime metadata: "
+              f"{', '.join(skipped)}")
+
+    return tool_configs
+
+
 # ============ Message Processing Functions ============
 
 def process_agent_message(chunk: str) -> tuple[str, str]:

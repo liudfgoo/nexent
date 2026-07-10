@@ -447,7 +447,7 @@ def main():
     constraint_prompt = args.constraint_prompt or prompts.get("constraint_prompt", "")
     few_shots_prompt = args.few_shots_prompt or prompts.get("few_shots_prompt", "")
     max_steps = args.max_steps or agent_cfg.get("max_steps", 10)
-    temperature = args.temperature if args.temperature is not None else 0.1
+    temperature = args.temperature if args.temperature is not None else agent_cfg.get("temperature", 0.1)
     language = args.language or "en"
     
     # Context manager
@@ -509,12 +509,16 @@ def main():
         )
         return
     
+    from agent_runner import build_tools_from_yaml
+    tools_yaml = agent_config.get("tools", [])
+    tools = build_tools_from_yaml(tools_yaml) if tools_yaml else []
+
     # Run new experiment
     from task_adapter import make_nexent_task
-    
+
     from nexent.core.agents.agent_context import ContextManagerConfig
     cm_config = ContextManagerConfig(enabled=enable_cm)
-    
+
     task_fn = make_nexent_task(
         system_prompt=system_prompt,
         duty_prompt=duty_prompt,
@@ -525,15 +529,17 @@ def main():
         language=language,
         input_key=args.input_key,
         context_manager_config=cm_config,
+        tools=tools,
     )
-    
+
     run_name = args.run_name or f"{args.dataset}-{int(time.time())}"
-    
+
     print(f"\nConfiguration:")
     print(f"  Max steps:    {max_steps}")
     print(f"  Temperature:  {temperature}")
     print(f"  Language:     {language}")
     print(f"  Context mgr:  {enable_cm}")
+    print(f"  Tools:        {len(tools)} ({', '.join(t.name for t in tools) if tools else 'none'})")
     if duty_prompt:
         print(f"  Duty prompt:  {duty_prompt[:60]}...")
     
