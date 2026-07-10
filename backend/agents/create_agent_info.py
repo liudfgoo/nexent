@@ -958,6 +958,7 @@ async def create_agent_config(
         token_threshold=context_token_threshold,
         soft_input_budget_tokens=soft_input_budget_tokens,
         hard_input_budget_tokens=hard_input_budget_tokens,
+        strategy="full",
     )
     agent_config = AgentConfig(
         name="undefined" if agent_info["name"] is None else agent_info["name"],
@@ -1092,7 +1093,7 @@ async def create_tool_config_list(
                     f"No embedding model found for index '{index_names[0]}'. "
                     f"Please configure an embedding model for this knowledge base.")
             tool_config.metadata["embedding_model"] = embedding_model
-        elif tool_config.class_name in ["DifySearchTool", "DataMateSearchTool"]:
+        elif tool_config.class_name in ["DifySearchTool", "DataMateSearchTool", "RAGFlowSearchTool"]:
             rerank = tool_config.params.get("rerank", False)
             rerank_model_name = tool_config.params.get("rerank_model_name", "")
             rerank_model = None
