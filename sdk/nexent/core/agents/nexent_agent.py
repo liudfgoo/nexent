@@ -542,8 +542,10 @@ class NexentAgent:
                             total_output_tokens += step_output
 
                         estimated_context = None
+                        last_metric = None
                         if hasattr(self.agent, "step_metrics") and self.agent.step_metrics:
-                            estimated_context = self.agent.step_metrics[-1].get(
+                            last_metric = self.agent.step_metrics[-1]
+                            estimated_context = last_metric.get(
                                 "memory_state", {}
                             ).get("estimated_input_tokens")
 
@@ -563,6 +565,17 @@ class NexentAgent:
                             "estimated_context_tokens": estimated_context,
                             "token_threshold": token_threshold,
                         }
+
+                        # Forward compression stats from step_metrics when available
+                        if last_metric:
+                            compression = last_metric.get("compression", {})
+                            token_data["compression_calls"] = compression.get("calls", 0)
+                            token_data["compression_input_tokens"] = compression.get("input_tokens", 0)
+                            token_data["compression_output_tokens"] = compression.get("output_tokens", 0)
+                            token_data["compression_cache_hits"] = compression.get("cache_hits", 0)
+                            token_data["compression_cache_types"] = compression.get("cache_types", [])
+                            token_data["compression_ratio"] = last_metric.get("compression_ratio", 0.0)
+                            token_data["uncompressed_est_tokens"] = last_metric.get("uncompressed_mem_est_input", 0)
                         observer.add_message("", ProcessType.TOKEN_COUNT, json.dumps(token_data))
 
                         if hasattr(step_log, "error") and step_log.error is not None:

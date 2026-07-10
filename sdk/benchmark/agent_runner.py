@@ -78,14 +78,16 @@ DEFAULT_FALLBACK_PROMPT = """You are a helpful AI assistant that can help users 
 
 # ============ Message Type Constants ============
 TRACKED_MESSAGE_TYPES = {
-    "agent_new_run",          # task start
-    "step_count",              # step count
-    "model_output_thinking",   # thinking process
-    "model_output",            # model output
-    "code_output",             # code execution result
-    "final_answer",            # final answer
-    "error",                   # error
-    "token_count",             # per-step token usage stats
+    "agent_new_run",
+    "step_count",
+    "model_output",
+    "model_output_thinking",
+    "model_output_deep_thinking",
+    "model_output_code",
+    "execution_logs",
+    "final_answer",
+    "error",
+    "token_count",
 }
 
 
@@ -401,8 +403,16 @@ class AgentRunResult:
         self.message_type_count: dict = {}
         self.step_count: int = 0
         self.errors: list = []
-        self.total_input_tokens: int = 0
+        self.total_input_tokens: int = 0       # estimated (includes system prompt)
+        self.total_api_input_tokens: int = 0   # API-reported (may exclude cached system prompt)
         self.total_output_tokens: int = 0
+        self.steps: list = []
+        self.compression_calls: int = 0
+        self.compression_input_tokens: int = 0
+        self.compression_output_tokens: int = 0
+        self.compression_cache_hits: int = 0
+        self.compression_cache_types: list = []
+        self.total_uncompressed_est_tokens: int = 0
 
     def __repr__(self):
         return f"AgentRunResult(final_answer_len={len(self.final_answer)}, " \
@@ -433,6 +443,7 @@ async def run_agent_with_tracking(
         >>> print(result.message_type_count)
     """
     result = AgentRunResult()
+    current_step = None
 
     async for chunk in agent_run(agent_run_info):
         if not chunk:
@@ -444,32 +455,99 @@ async def run_agent_with_tracking(
             print(f"[DEBUG] Type={msg_type}, Content Length={len(msg_content)}",
                   file=sys.stderr, flush=True)
 
-        # Count message types
         if msg_type in TRACKED_MESSAGE_TYPES:
             result.message_type_count[msg_type] = result.message_type_count.get(msg_type, 0) + 1
 
-            if msg_type in ["step_count", "final_answer"]:
+            if msg_type == "step_count":
                 result.step_count += 1
+                current_step = {
+                    "step_number": msg_content,
+                    "thinking": "",
+                    "deep_thinking": "",
+                    "main_output": "",
+                    "code": "",
+                    "observation": "",
+                    "token_usage": None,
+                }
+                result.steps.append(current_step)
 
-        # Handle final answer
+        if msg_type == "model_output_thinking" and current_step is not None:
+            current_step["thinking"] += msg_content
+
+        if msg_type == "model_output_deep_thinking" and current_step is not None:
+            current_step["deep_thinking"] += msg_content
+
+        if msg_type == "model_output" and current_step is not None:
+            current_step["main_output"] += msg_content
+
+        if msg_type == "model_output_code" and current_step is not None:
+            current_step["code"] += msg_content
+
+        if msg_type == "execution_logs" and current_step is not None:
+            current_step["observation"] += msg_content
+
         if msg_type == "final_answer":
             result.final_answer = msg_content
             result.full_response += msg_content
+            result.steps.append({
+                "step_number": "final_answer",
+                "thinking": "",
+                "deep_thinking": "",
+                "main_output": msg_content,
+                "code": "",
+                "observation": "",
+                "token_usage": None,
+            })
             if on_final_answer:
                 on_final_answer(msg_content)
 
-        # Handle error
         elif msg_type == "error":
             result.errors.append(msg_content)
             if on_error:
                 on_error(msg_content)
 
-        # Handle token_count — accumulate real main-LLM token usage
         elif msg_type == "token_count":
             try:
                 token_data = json.loads(msg_content)
-                result.total_input_tokens += token_data.get("step_input_tokens", 0) or 0
+                # Use estimated_context_tokens (includes system prompt + tools +
+                # full context) for total_input_tokens.  API-reported
+                # step_input_tokens may exclude cached system prompt tokens
+                # (provider-dependent), so it is tracked separately.
+                est_ctx = token_data.get("estimated_context_tokens")
+                api_input = token_data.get("step_input_tokens", 0) or 0
+                result.total_input_tokens += (est_ctx or api_input or 0)
+                result.total_api_input_tokens += api_input
                 result.total_output_tokens += token_data.get("step_output_tokens", 0) or 0
+
+                result.compression_calls += token_data.get("compression_calls", 0) or 0
+                result.compression_input_tokens += token_data.get("compression_input_tokens", 0) or 0
+                result.compression_output_tokens += token_data.get("compression_output_tokens", 0) or 0
+                result.compression_cache_hits += token_data.get("compression_cache_hits", 0) or 0
+                result.total_uncompressed_est_tokens += token_data.get("uncompressed_est_tokens", 0) or 0
+                cache_types = token_data.get("compression_cache_types", []) or []
+                for ct in cache_types:
+                    if ct not in result.compression_cache_types:
+                        result.compression_cache_types.append(ct)
+
+                if current_step is not None:
+                    est_ctx = token_data.get("estimated_context_tokens")
+                    api_in = token_data.get("step_input_tokens", 0)
+                    current_step["token_usage"] = {
+                        "input_tokens": est_ctx or api_in or 0,
+                        "api_input_tokens": api_in,
+                        "output_tokens": token_data.get("step_output_tokens", 0),
+                    }
+                    current_step["compression"] = {
+                        "calls": token_data.get("compression_calls", 0),
+                        "input_tokens": token_data.get("compression_input_tokens", 0),
+                        "output_tokens": token_data.get("compression_output_tokens", 0),
+                        "cache_hits": token_data.get("compression_cache_hits", 0),
+                        "cache_types": token_data.get("compression_cache_types", []),
+                        "ratio": token_data.get("compression_ratio", 0.0),
+                        "uncompressed_est_tokens": token_data.get("uncompressed_est_tokens", 0),
+                        "estimated_context_tokens": token_data.get("estimated_context_tokens"),
+                        "token_threshold": token_data.get("token_threshold"),
+                    }
             except (json.JSONDecodeError, TypeError):
                 pass
 
