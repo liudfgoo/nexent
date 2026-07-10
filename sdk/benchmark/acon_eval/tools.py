@@ -85,18 +85,22 @@ class FinalAnswerTool(Tool):
 # ---------------------------------------------------------------------------
 
 def register_acon_tools():
-    """Inject ACON tool classes into nexent.core.tools AND nexent_agent namespaces.
+    """Inject ACON tool classes into nexent_agent namespace.
 
     NexentAgent.create_local_tool() looks up tool classes via globals(),
-    which is populated by `from ..tools import *` at import time.
-    Since `setattr` on the tools module does NOT update nexent_agent's
-    already-executed `globals()`, we must inject into BOTH modules.
+    so we inject into nexent_agent's module namespace.
+    The nexent.core.tools import is optional (it pulls in exa/tavily/etc
+    which may not be installed in benchmark environments).
     """
-    import nexent.core.tools as _tools_mod
     import nexent.core.agents.nexent_agent as _agent_mod
     for cls in (WikipediaSearchTool, FinalAnswerTool):
-        setattr(_tools_mod, cls.__name__, cls)
         setattr(_agent_mod, cls.__name__, cls)
+    try:
+        import nexent.core.tools as _tools_mod
+        for cls in (WikipediaSearchTool, FinalAnswerTool):
+            setattr(_tools_mod, cls.__name__, cls)
+    except (ImportError, ModuleNotFoundError):
+        pass
 
 
 def build_wikipedia_search_tool_config(port: str = "8005") -> ToolConfig:

@@ -7,3 +7,5 @@ outputs/
 # Runtime artifacts
 __pycache__/
 nexent_context_metrics.log
+generate_mock_corpus.py
+langfuse_experiment_params.md
