@@ -233,7 +233,7 @@ SDK 已提供但 benchmark 尚未完整记录的内容包括：
 | G2 | 待处理 | | |
 | G3 | 待处理 | | |
 | G4 | 待处理 | | |
-| G5 | SDK 缺陷已修复 | `prepare_run_context` 在 `stable_messages` 为空且 `fallback_system_prompt` 存在时，构造 system ChatMessage 作为 stable prefix，防止 system prompt 被 `_without_leading_stable_messages` 静默丢弃 | `context_components=[]` + `enabled=True` 时 system prompt 正确出现在模型输入中 |
+| G5 | 已修复 | Benchmark 侧构造 context_components：`build_agent_run_info` 在 CM 启用时调用 `build_context_components()` 模拟生产组件；`build_agent_run_info_with_custom_prompt` 将自定义 prompt 包装为 `SystemPromptComponent` | `components=[]` 不再出现，system prompt 不被 `_without_leading_stable_messages` 丢弃 |
 | G6 | 已修复 | `task_adapter.py` 的 custom prompt 分支补传 `context_manager_config` | `--system-prompt-file --enable-context-manager` 正确启用 ManagedContextRuntime（注：修复后暴露了 G5 的 system prompt 丢弃缺陷，G5 已同步修复） |
 | G7 | 已修复 | SDK `agent_run_with_observer` 将 `step_metrics` 中的压缩字段转发到 `token_count` observer 消息；benchmark `AgentRunResult` 新增压缩聚合字段；`run_agent_with_tracking` 解析每步压缩数据；`task_adapter` 输出 `compression` 段；`run_benchmark` 将压缩指标写入 Langfuse trace metadata、step span metadata 和 trace score | 每步输出 compression calls、input/output tokens、cache hits、cache types、ratio；trace 级聚合可对比不同配置 |
 | G8 | 待处理 | | |

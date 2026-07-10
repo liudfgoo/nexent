@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import paths  # noqa: F401 — side-effect: adds sdk/, backend/ to sys.path
 
 from utils.prompt_template_utils import get_agent_prompt_template
+from utils.context_utils import build_context_components, build_system_prompt_component
 from nexent.core.agents.agent_model import (
     AgentRunInfo, AgentConfig, ModelConfig, AgentHistory, ToolConfig
 )
@@ -270,6 +271,32 @@ def build_agent_run_info(
     # Set context manager config
     cm_config = context_manager_config
 
+    # Build context components when ContextManager is enabled, matching
+    # production behavior in create_agent_info.py. Without components,
+    # ManagedContextRuntime produces empty stable_messages and the system
+    # prompt gets silently dropped by _without_leading_stable_messages.
+    context_components = None
+    if cm_config and cm_config.enabled:
+        tools_dict = {tool.name: tool for tool in tools} if tools else {}
+        managed_agents_dict = {agent.name: agent for agent in managed_agents} if managed_agents else {}
+        context_components = build_context_components(
+            duty=duty,
+            constraint=constraint,
+            few_shots=few_shots,
+            app_name=APP_NAME,
+            app_description=APP_DESCRIPTION,
+            user_id=user_id,
+            language=language,
+            is_manager=is_manager,
+            tools=tools_dict,
+            skills=skills or [],
+            managed_agents=managed_agents_dict,
+            external_a2a_agents={},
+            memory_list=[],
+            memory_search_query=None,
+            knowledge_base_summary="",
+            kb_ids=[],
+        )
 
     agent_config = AgentConfig(
         name=agent_name,
@@ -279,7 +306,8 @@ def build_agent_run_info(
         model_name="main_model",
         prompt_templates=prompt_templates,
         managed_agents=managed_agents,
-        context_manager_config=cm_config
+        context_manager_config=cm_config,
+        context_components=context_components,
     )
 
 
@@ -353,6 +381,19 @@ def build_agent_run_info_with_custom_prompt(
         is_manager=is_manager,
     )
 
+    # Wrap custom system prompt as a single SystemPromptComponent when
+    # ContextManager is enabled, so it becomes a stable_message and survives
+    # _without_leading_stable_messages stripping.
+    context_components = None
+    if context_manager_config and context_manager_config.enabled:
+        context_components = [
+            build_system_prompt_component(
+                content=system_prompt,
+                template_name="custom_prompt",
+                priority=100,
+            )
+        ]
+
     agent_config = AgentConfig(
         name=agent_name,
         description=agent_description,
@@ -362,6 +403,7 @@ def build_agent_run_info_with_custom_prompt(
         prompt_templates=prompt_templates,
         managed_agents=managed_agents,
         context_manager_config=context_manager_config,
+        context_components=context_components,
     )
 
     import threading
