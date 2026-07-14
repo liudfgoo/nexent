@@ -94,6 +94,7 @@ agent_config:
 | `--existing-run` | 要重新评分的已有运行名称      |
 
 ## 使用示例
+ `source backend/.venv/bin/activate` 激活环境
 
 ### 场景 1：使用 Agent 配置运行实验
 

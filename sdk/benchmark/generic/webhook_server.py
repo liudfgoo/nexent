@@ -56,9 +56,11 @@ class WebhookPayload(BaseModel):
 
 
 def run_experiment_task(dataset_name: str, evaluators: list, max_steps: int,
-                        run_name: str, temperature: float, language: str):
+                        run_name: str, temperature: float, language: str,
+                        agent_config_path: str = None):
     """Run a new experiment (blocking — called in background thread)."""
     try:
+        import yaml
         from langfuse import Langfuse
         from evaluators import resolve_evaluators
         from task_adapter import make_nexent_task
@@ -67,21 +69,67 @@ def run_experiment_task(dataset_name: str, evaluators: list, max_steps: int,
         lf = Langfuse()
         evaluator_fns = resolve_evaluators(evaluators)
 
+        duty_prompt = ""
+        constraint_prompt = ""
+        few_shots_prompt = ""
+        system_prompt = ""
+        enable_cm = False
+
+        if agent_config_path:
+            if not os.path.isabs(agent_config_path):
+                agent_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), agent_config_path)
+            logger.info(f"Loading agent config from: {agent_config_path}")
+            with open(agent_config_path, "r", encoding="utf-8") as f:
+                agent_config = yaml.safe_load(f)
+
+            agent_info = agent_config.get("agent_info", {})
+            logger.info(f"  Agent: {agent_info.get('display_name', 'unknown')}")
+
+            prompts = agent_config.get("prompts", {})
+            agent_cfg = agent_config.get("agent_config", {})
+
+            duty_prompt = prompts.get("duty_prompt", "")
+            constraint_prompt = prompts.get("constraint_prompt", "")
+            few_shots_prompt = prompts.get("few_shots_prompt", "")
+            max_steps = max_steps or agent_cfg.get("max_steps", 10)
+            enable_cm = agent_cfg.get("enable_context_manager", False)
+
+        from nexent.core.agents.agent_context import ContextManagerConfig
+        cm_config = ContextManagerConfig(enabled=enable_cm)
+
         dataset = lf.get_dataset(dataset_name)
         items = dataset.items
         logger.info(f"Experiment '{run_name}': {len(items)} items, evaluators={evaluators}")
 
         task_fn = make_nexent_task(
+            system_prompt=system_prompt,
+            duty_prompt=duty_prompt,
+            constraint_prompt=constraint_prompt,
+            few_shots_prompt=few_shots_prompt,
             max_steps=max_steps,
             temperature=temperature,
             language=language,
+            context_manager_config=cm_config,
         )
+
+        logger.info(f"Configuration:")
+        logger.info(f"  Max steps:    {max_steps}")
+        logger.info(f"  Temperature:  {temperature}")
+        logger.info(f"  Language:     {language}")
+        logger.info(f"  Context mgr:  {enable_cm}")
+        if duty_prompt:
+            logger.info(f"  Duty prompt:  {duty_prompt[:60]}...")
 
         total_scores = {}
         passed = 0
+        failed = 0
+        agg_compression_calls = 0
+        agg_compression_input_tokens = 0
+        agg_compression_cache_hits = 0
 
         for i, item in enumerate(items):
-            logger.info(f"  [{i+1}/{len(items)}] running...")
+            q_preview = str(item.input)[:60] if item.input else ""
+            logger.info(f"  [{i+1}/{len(items)}] {q_preview}...")
             trace = lf.trace(
                 name=f"benchmark-{dataset_name}",
                 input=item.input,
@@ -94,7 +142,44 @@ def run_experiment_task(dataset_name: str, evaluators: list, max_steps: int,
                 logger.error(f"  [{i+1}] ERROR: {e}")
                 output = {"final_answer": "", "errors": [str(e)]}
 
-            trace.update(output=output)
+            trace.update(
+                output=output,
+                metadata={
+                    "run_name": run_name,
+                    "item_index": i,
+                    "system_prompt": output.get("system_prompt", ""),
+                    "model_config": output.get("model_config", {}),
+                    "agent_config": output.get("agent_config", {}),
+                    "compression": output.get("compression", {}),
+                },
+            )
+
+            steps = output.get("steps", [])
+            for step in steps:
+                step_num = step.get("step_number", "?")
+                if step_num == "final_answer":
+                    trace.span(
+                        name="final_answer",
+                        output={"answer": step.get("main_output", "")},
+                        metadata={"token_usage": step.get("token_usage")},
+                    )
+                else:
+                    trace.span(
+                        name=f"step_{step_num}",
+                        input={
+                            "thinking": step.get("thinking", ""),
+                            "deep_thinking": step.get("deep_thinking", ""),
+                        },
+                        output={
+                            "main_output": step.get("main_output", ""),
+                            "code": step.get("code", ""),
+                            "observation": step.get("observation", ""),
+                        },
+                        metadata={
+                            "token_usage": step.get("token_usage"),
+                            "compression": step.get("compression"),
+                        },
+                    )
 
             item_scores = {}
             for eval_fn in evaluator_fns:
@@ -117,19 +202,48 @@ def run_experiment_task(dataset_name: str, evaluators: list, max_steps: int,
                 except Exception as e:
                     logger.error(f"  [{i+1}] EVAL_ERROR: {e}")
 
+            compression = output.get("compression", {})
+            agg_compression_calls += compression.get("calls", 0)
+            agg_compression_input_tokens += compression.get("input_tokens", 0)
+            agg_compression_cache_hits += compression.get("cache_hits", 0)
+            if compression.get("calls", 0) > 0:
+                trace.score(name="compression_calls", value=compression["calls"])
+                trace.score(name="compression_input_tokens", value=compression.get("input_tokens", 0))
+                trace.score(name="compression_output_tokens", value=compression.get("output_tokens", 0))
+                trace.score(name="compression_cache_hits", value=compression.get("cache_hits", 0))
+                total_uncompressed = compression.get("total_uncompressed_est_tokens", 0)
+                total_input = output.get("total_input_tokens", 0)
+                if total_uncompressed > 0:
+                    trace.score(
+                        name="compression_token_reduction_pct",
+                        value=round((1 - total_input / total_uncompressed) * 100, 1),
+                    )
+
             primary = next(iter(item_scores.values()), 0.0)
             if primary >= 1.0:
                 passed += 1
+            else:
+                failed += 1
+
+            score_str = ", ".join(f"{k}={v:.2f}" for k, v in item_scores.items())
+            logger.info(f"  [{i+1}] ✓ {score_str}")
 
             item.link(trace, run_name)
-            logger.info(f"  [{i+1}] scores={item_scores}")
 
         lf.flush()
 
-        avg_str = ", ".join(
-            f"avg_{k}={sum(v)/len(v):.4f}" for k, v in total_scores.items()
-        )
-        logger.info(f"Experiment '{run_name}' DONE: {passed}/{len(items)} passed, {avg_str}")
+        logger.info(f"Experiment '{run_name}' DONE:")
+        logger.info(f"  Total:  {len(items)}")
+        logger.info(f"  Passed: {passed}")
+        logger.info(f"  Failed: {failed}")
+        for metric, values in total_scores.items():
+            avg = sum(values) / len(values) if values else 0
+            logger.info(f"  Avg {metric}: {avg:.4f}")
+        if agg_compression_calls > 0:
+            logger.info(f"  Compression:")
+            logger.info(f"    Total calls:        {agg_compression_calls}")
+            logger.info(f"    Total input tokens: {agg_compression_input_tokens}")
+            logger.info(f"    Total cache hits:   {agg_compression_cache_hits}")
     
     except Exception as e:
         logger.error(f"Experiment '{run_name}' FAILED: {e}", exc_info=True)
@@ -220,6 +334,7 @@ async def handle_webhook(payload: WebhookPayload, background_tasks: BackgroundTa
       max_steps: int (default: 10)
       temperature: float (default: 0.1)
       language: "en" or "zh" (default: "en")
+      agent-config: path to agent YAML config file (optional)
       existing_run: str (required for mode="rescore")
     """
     logger.info(f"Webhook received: dataset_name={payload.dataset_name}, datasetName={payload.datasetName}, "
@@ -253,10 +368,11 @@ async def handle_webhook(payload: WebhookPayload, background_tasks: BackgroundTa
     temperature = config.get("temperature", 0.1)
     language = config.get("language", "en")
     run_name = config.get("run_name") or f"{dataset_name}-{int(time.time())}"
+    agent_config_path = config.get("agent-config") or config.get("agent_config")
 
     background_tasks.add_task(
         run_experiment_task, dataset_name, evaluators, max_steps,
-        run_name, temperature, language,
+        run_name, temperature, language, agent_config_path,
     )
     return {"status": "accepted", "mode": "run", "run_name": run_name}
 
