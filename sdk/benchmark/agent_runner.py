@@ -420,20 +420,85 @@ def build_agent_run_info_with_custom_prompt(
 
 # ============ YAML Tool Configuration ============
 
-# Tools that require runtime metadata injection (DB connections, model instances, etc.)
-# and cannot be fully reconstructed from YAML alone.
-_METADATA_REQUIRED_TOOLS = {
+# Tools whose metadata depends on external services (DB, knowledge base engines,
+# memory stores) that are not available in a standalone benchmark environment.
+_METADATA_UNSUPPORTED_TOOLS = {
     "KnowledgeBaseSearchTool",
-    "AnalyzeTextFileTool",
-    "AnalyzeImageTool",
-    "AnalyzeAudioTool",
-    "AnalyzeVideoTool",
     "DifySearchTool",
     "DataMateSearchTool",
     "HaotianSearchTool",
     "StoreMemoryTool",
     "SearchMemoryTool",
 }
+
+# Analyze tools need storage_client / vlm_model / data_process_service_url
+# injected via metadata. We construct these from environment variables.
+_ANALYZE_TOOL_CLASSES = {
+    "AnalyzeTextFileTool",
+    "AnalyzeImageTool",
+    "AnalyzeAudioTool",
+    "AnalyzeVideoTool",
+}
+
+
+def _build_storage_client():
+    endpoint = os.getenv("MINIO_ENDPOINT")
+    access_key = os.getenv("MINIO_ACCESS_KEY")
+    secret_key = os.getenv("MINIO_SECRET_KEY")
+    if not all([endpoint, access_key, secret_key]):
+        return None
+    from nexent.storage.minio import MinIOStorageClient
+    return MinIOStorageClient(
+        endpoint=endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        region=os.getenv("MINIO_REGION"),
+        default_bucket=os.getenv("MINIO_DEFAULT_BUCKET"),
+        secure=os.getenv("MINIO_SECURE", "true").lower() == "true",
+    )
+
+
+def _build_vlm_model():
+    api_url = os.getenv("VLM_API_URL") or os.getenv("LLM_API_URL")
+    api_key = os.getenv("VLM_API_KEY") or os.getenv("LLM_API_KEY")
+    model_name = os.getenv("VLM_MODEL_NAME") or os.getenv("LLM_MODEL_NAME")
+    if not all([api_url, api_key, model_name]):
+        return None
+    from nexent.core.models.openai_vlm import OpenAIVLModel
+    return OpenAIVLModel(
+        observer=MessageObserver(),
+        model_id=model_name,
+        api_base=api_url,
+        api_key=api_key,
+        temperature=0.7,
+        ssl_verify=False,
+    )
+
+
+def _build_analyze_tool_metadata(class_name: str) -> dict:
+    """Construct metadata dict for Analyze* tools from environment variables.
+
+    NexentAgent.create_local_tool() reads these metadata keys and sets them
+    on the tool instance after construction. observer is auto-injected by
+    NexentAgent and does not need to be in metadata.
+    """
+    metadata = {}
+
+    storage_client = _build_storage_client()
+    if storage_client:
+        metadata["storage_client"] = storage_client
+
+    if class_name == "AnalyzeTextFileTool":
+        metadata["llm_model"] = os.getenv("LLM_MODEL_NAME", "")
+        data_process_url = os.getenv("DATA_PROCESS_SERVICE")
+        if data_process_url:
+            metadata["data_process_service_url"] = data_process_url
+    else:
+        vlm_model = _build_vlm_model()
+        if vlm_model:
+            metadata["vlm_model"] = vlm_model
+
+    return metadata
 
 
 def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
@@ -446,7 +511,8 @@ def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
 
     Returns:
         List of ToolConfig objects ready for make_nexent_task(tools=...).
-        Skips disabled tools and metadata-required tools with a warning.
+        Analyze* tools get metadata constructed from environment variables.
+        Tools depending on external services (KB, memory) are skipped with a warning.
     """
     if not tools_yaml:
         return []
@@ -462,9 +528,13 @@ def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
         tool_name = entry.get("tool_name", "")
         source = entry.get("tool_source", "local")
 
-        if class_name in _METADATA_REQUIRED_TOOLS:
+        if class_name in _METADATA_UNSUPPORTED_TOOLS:
             skipped.append(f"{tool_name} ({class_name})")
             continue
+
+        metadata = None
+        if class_name in _ANALYZE_TOOL_CLASSES:
+            metadata = _build_analyze_tool_metadata(class_name)
 
         tool_configs.append(ToolConfig(
             class_name=class_name,
@@ -475,10 +545,11 @@ def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
             params=entry.get("tool_params", {}),
             source=source,
             usage=entry.get("tool_usage"),
+            metadata=metadata if metadata else None,
         ))
 
     if skipped:
-        print(f"  WARNING: Skipped {len(skipped)} tools requiring runtime metadata: "
+        print(f"  WARNING: Skipped {len(skipped)} tools requiring external services: "
               f"{', '.join(skipped)}")
 
     return tool_configs

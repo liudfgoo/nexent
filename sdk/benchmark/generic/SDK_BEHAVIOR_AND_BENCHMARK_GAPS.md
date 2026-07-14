@@ -230,7 +230,7 @@ SDK 已提供但 benchmark 尚未完整记录的内容包括：
 | 编号 | 状态 | 变更 | 验证 |
 |---|---|---|---|
 | G1 | 待处理 | | |
-| G2 | 已修复 | `agent_runner.py` 新增 `build_tools_from_yaml()` 将 YAML tools 段重建为 `ToolConfig` 对象；`run_benchmark.py` 读取 YAML tools 并传入 `make_nexent_task(tools=...)` | 导出的 YAML 工具配置（ExaSearchTool、TavilySearchTool 等）正确传入 Agent 运行；metadata-required 工具跳过并打印警告 |
+| G2 | 已修复 | `agent_runner.py` 新增 `build_tools_from_yaml()` 将 YAML tools 段重建为 `ToolConfig` 对象；Analyze* 工具的 metadata（storage_client、vlm_model、llm_model、data_process_service_url）从环境变量构造；`run_benchmark.py` 读取 YAML tools 并传入 `make_nexent_task(tools=...)` | 导出的 YAML 工具配置正确传入 Agent 运行；AnalyzeTextFileTool/AnalyzeImageTool/AnalyzeAudioTool/AnalyzeVideoTool 可用；依赖外部服务的工具（KB、memory）跳过并打印警告 |
 | G3 | 待处理 | | |
 | G4 | 待处理 | | |
 | G5 | 已修复 | Benchmark 侧构造 context_components：`build_agent_run_info` 在 CM 启用时调用 `build_context_components()` 模拟生产组件；`build_agent_run_info_with_custom_prompt` 将自定义 prompt 包装为 `SystemPromptComponent` | `components=[]` 不再出现，system prompt 不被 `_without_leading_stable_messages` 丢弃 |
