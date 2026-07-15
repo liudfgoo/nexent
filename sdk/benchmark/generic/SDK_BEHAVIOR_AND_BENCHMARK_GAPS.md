@@ -231,7 +231,7 @@ SDK 已提供但 benchmark 尚未完整记录的内容包括：
 |---|---|---|---|
 | G1 | 待处理 | | |
 | G2 | 已修复 | `agent_runner.py` 新增 `build_tools_from_yaml()` 将 YAML tools 段重建为 `ToolConfig` 对象；Analyze* 工具的 metadata（storage_client、vlm_model、llm_model、data_process_service_url）从环境变量构造；`task_adapter.py` 在 DatasetItem 有 `file_name` 时注入 S3 URL（模仿生产 `create_agent_info.py` 行为）；新增 `upload_gaia_files.py` 预上传附件到 MinIO；`run_benchmark.py` 读取 YAML tools 并传入 `make_nexent_task(tools=...)` | 导出的 YAML 工具配置正确传入 Agent 运行；AnalyzeTextFileTool/AnalyzeImageTool/AnalyzeAudioTool/AnalyzeVideoTool/TerminalTool 可用；文件附件通过 S3 URL 注入 query；依赖外部服务的工具（KB、memory）跳过并打印警告 |
-| G3 | 待处理 | | |
+| G3 | 已修复 | `run_benchmark.py` 新增 `--token-threshold`、`--keep-recent-steps`、`--keep-recent-pairs`、`--max-observation-length` CLI 参数；不传时使用 SDK 默认值；`ContextManagerConfig` 按非 None 字段动态构造 | CLI 可控制压缩阈值、保留步数/对数、observation 截断长度；不传则保持 SDK 默认行为 |
 | G4 | 待处理 | | |
 | G5 | 已修复 | Benchmark 侧构造 context_components：`build_agent_run_info` 在 CM 启用时调用 `build_context_components()` 模拟生产组件；`build_agent_run_info_with_custom_prompt` 将自定义 prompt 包装为 `SystemPromptComponent` | `components=[]` 不再出现，system prompt 不被 `_without_leading_stable_messages` 丢弃 |
 | G6 | 已修复 | `task_adapter.py` 的 custom prompt 分支补传 `context_manager_config` | `--system-prompt-file --enable-context-manager` 正确启用 ManagedContextRuntime（注：修复后暴露了 G5 的 system prompt 丢弃缺陷，G5 已同步修复） |

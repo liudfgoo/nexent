@@ -400,6 +400,14 @@ def main():
                         help="Enable context manager (overrides YAML)")
     parser.add_argument("--disable-context-manager", action="store_true",
                         help="Disable context manager (overrides YAML)")
+    parser.add_argument("--token-threshold", type=int,
+                        help="Context manager token threshold (SDK default: 10000)")
+    parser.add_argument("--keep-recent-steps", type=int,
+                        help="Keep N recent action steps from compression (SDK default: 4)")
+    parser.add_argument("--keep-recent-pairs", type=int,
+                        help="Keep N recent conversation pairs from compression (SDK default: 2)")
+    parser.add_argument("--max-observation-length", type=int,
+                        help="Truncate observations longer than N chars; 0=disabled (SDK default: 0)")
     
     # Execution
     parser.add_argument("--max-concurrency", type=int, default=1,
@@ -517,7 +525,16 @@ def main():
     from task_adapter import make_nexent_task
 
     from nexent.core.agents.agent_context import ContextManagerConfig
-    cm_config = ContextManagerConfig(enabled=enable_cm)
+    cm_kwargs = {"enabled": enable_cm}
+    if args.token_threshold is not None:
+        cm_kwargs["token_threshold"] = args.token_threshold
+    if args.keep_recent_steps is not None:
+        cm_kwargs["keep_recent_steps"] = args.keep_recent_steps
+    if args.keep_recent_pairs is not None:
+        cm_kwargs["keep_recent_pairs"] = args.keep_recent_pairs
+    if args.max_observation_length is not None:
+        cm_kwargs["max_observation_length"] = args.max_observation_length
+    cm_config = ContextManagerConfig(**cm_kwargs)
 
     task_fn = make_nexent_task(
         system_prompt=system_prompt,
@@ -539,6 +556,11 @@ def main():
     print(f"  Temperature:  {temperature}")
     print(f"  Language:     {language}")
     print(f"  Context mgr:  {enable_cm}")
+    if enable_cm:
+        print(f"  CM config:    threshold={cm_config.token_threshold}, "
+              f"keep_steps={cm_config.keep_recent_steps}, "
+              f"keep_pairs={cm_config.keep_recent_pairs}, "
+              f"max_obs_len={cm_config.max_observation_length}")
     print(f"  Tools:        {len(tools)} ({', '.join(t.name for t in tools) if tools else 'none'})")
     if duty_prompt:
         print(f"  Duty prompt:  {duty_prompt[:60]}...")
