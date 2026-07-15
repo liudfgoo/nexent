@@ -57,6 +57,8 @@ def make_nexent_task(
     """
     tools = tools or []
     managed_agents = managed_agents or []
+    minio_bucket = os.getenv("MINIO_DEFAULT_BUCKET", "nexent")
+    file_prefix = os.getenv("GAIA_FILE_PREFIX", "gaia")
 
     def task(*, item, **kwargs):
         """Execute NexentAgent on a single DatasetItem.
@@ -75,6 +77,17 @@ def make_nexent_task(
             inp = item.input if hasattr(item, "input") else {}
 
         question = inp.get(input_key, "") if isinstance(inp, dict) else str(inp)
+
+        # Inject file attachment S3 URL when DatasetItem has file_name,
+        # matching production behavior in create_agent_info.py
+        file_name = inp.get("file_name") if isinstance(inp, dict) else None
+        if file_name and question:
+            s3_url = f"s3:/{minio_bucket}/{file_prefix}/{file_name}"
+            question = (
+                f"User uploaded files. The file information is as follows:\n\n"
+                f"File name: {file_name}, S3 URL: {s3_url}  [permanent]\n\n"
+                f"User wants to answer questions based on the information in the above files: {question}"
+            )
 
         if not question:
             return {

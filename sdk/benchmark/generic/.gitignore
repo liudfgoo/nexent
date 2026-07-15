@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 *.log
 .omo/
+/datasets/gaia_level1/
