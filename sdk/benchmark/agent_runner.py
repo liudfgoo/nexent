@@ -85,6 +85,7 @@ TRACKED_MESSAGE_TYPES = {
     "model_output_thinking",
     "model_output_deep_thinking",
     "model_output_code",
+    "parse",
     "execution_logs",
     "final_answer",
     "error",
@@ -623,6 +624,7 @@ async def run_agent_with_tracking(
     """
     result = AgentRunResult()
     current_step = None
+    initial_query = agent_run_info.query
 
     async for chunk in agent_run(agent_run_info):
         if not chunk:
@@ -641,10 +643,12 @@ async def run_agent_with_tracking(
                 result.step_count += 1
                 current_step = {
                     "step_number": msg_content,
+                    "query": initial_query if result.step_count == 1 else "",
                     "thinking": "",
                     "deep_thinking": "",
                     "main_output": "",
                     "code": "",
+                    "tool_call": "",
                     "observation": "",
                     "token_usage": None,
                 }
@@ -662,6 +666,9 @@ async def run_agent_with_tracking(
         if msg_type == "model_output_code" and current_step is not None:
             current_step["code"] += msg_content
 
+        if msg_type == "parse" and current_step is not None:
+            current_step["tool_call"] += msg_content
+
         if msg_type == "execution_logs" and current_step is not None:
             current_step["observation"] += msg_content
 
@@ -670,10 +677,12 @@ async def run_agent_with_tracking(
             result.full_response += msg_content
             result.steps.append({
                 "step_number": "final_answer",
+                "query": initial_query,
                 "thinking": "",
                 "deep_thinking": "",
                 "main_output": msg_content,
                 "code": "",
+                "tool_call": "",
                 "observation": "",
                 "token_usage": None,
             })

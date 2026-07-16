@@ -116,7 +116,8 @@ def export_agent_config(agent_id: int = None, agent_name: str = None,
         cursor.execute("""
             SELECT 
                 t.name, t.class_name, t.source, t.category,
-                t.description, ti.params, ti.enabled
+                t.description, t.inputs, t.output_type,
+                ti.params, ti.enabled
             FROM ag_tool_instance_t ti
             JOIN ag_tool_info_t t ON ti.tool_id = t.tool_id
             WHERE ti.agent_id = %s AND ti.version_no = %s AND ti.delete_flag = 'N'
@@ -125,13 +126,17 @@ def export_agent_config(agent_id: int = None, agent_name: str = None,
         
         tools = []
         for row in cursor.fetchall():
-            tool_name, tool_class, tool_source, tool_category, tool_desc, tool_params, enabled = row
+            (tool_name, tool_class, tool_source, tool_category,
+             tool_desc, tool_inputs, tool_output_type,
+             tool_params, enabled) = row
             tools.append({
                 "tool_name": tool_name,
                 "tool_class": tool_class,
                 "tool_source": tool_source,
                 "tool_category": tool_category,
                 "tool_description": tool_desc,
+                "tool_inputs": tool_inputs,
+                "tool_output_type": tool_output_type,
                 "tool_params": tool_params or {},
                 "enabled": enabled
             })

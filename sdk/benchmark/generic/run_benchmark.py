@@ -66,8 +66,9 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-# Add parent directory to path for imports
+# Add current directory (generic/) and parent (sdk/benchmark/) to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Load environment variables
 load_dotenv()
@@ -185,6 +186,7 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
             if step_num == "final_answer":
                 trace.span(
                     name="final_answer",
+                    input={"query": step.get("query", "")},
                     output={"answer": step.get("main_output", "")},
                     metadata={"token_usage": step.get("token_usage")},
                 )
@@ -192,12 +194,14 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                 trace.span(
                     name=f"step_{step_num}",
                     input={
+                        "query": step.get("query", ""),
                         "thinking": step.get("thinking", ""),
                         "deep_thinking": step.get("deep_thinking", ""),
                     },
                     output={
                         "main_output": step.get("main_output", ""),
                         "code": step.get("code", ""),
+                        "tool_call": step.get("tool_call", ""),
                         "observation": step.get("observation", ""),
                     },
                     metadata={

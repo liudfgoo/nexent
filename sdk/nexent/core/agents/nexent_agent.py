@@ -291,6 +291,23 @@ class NexentAgent:
                 tools_obj = tool_class(**params)
                 if hasattr(tools_obj, 'observer'):
                     tools_obj.observer = self.observer
+            # Apply ToolConfig inputs/output_type to the tool instance so that
+            # smolagents can render correct parameter signatures in the system
+            # prompt.  Without this, tools whose forward() is wrapped by
+            # decorators (e.g. load_object) lose introspectable signatures and
+            # smolagents falls back to "Accepts input: None".
+            if tool_config.inputs and hasattr(tools_obj, 'inputs'):
+                import json as _json
+                parsed = tool_config.inputs
+                if isinstance(parsed, str):
+                    try:
+                        parsed = _json.loads(parsed)
+                    except (ValueError, TypeError):
+                        parsed = None
+                if isinstance(parsed, dict):
+                    tools_obj.inputs = parsed
+            if tool_config.output_type and hasattr(tools_obj, 'output_type'):
+                tools_obj.output_type = tool_config.output_type
             return tools_obj
 
     def create_langchain_tool(self, tool_config: ToolConfig):

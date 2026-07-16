@@ -526,6 +526,13 @@ Additional Args:
         if code_output is not None and code_output.output is not None:
             truncated_output = truncate_content(str(code_output.output))
             observation += "Last output from code snippet:\n" + truncated_output
+            # Emit tool return value via observer so benchmark/monitoring can
+            # capture it.  code_output.logs (print output) was already emitted
+            # above; this covers the case where the agent assigns a tool result
+            # to a variable without printing it (e.g. result = analyze_image(...)).
+            self.observer.add_message(
+                self.agent_name, ProcessType.EXECUTION_LOGS,
+                f"Last output from code snippet:\n{truncated_output}")
         memory_step.observations = observation
 
         verification_controller = getattr(self, "verification_controller", None)
