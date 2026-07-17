@@ -20,6 +20,21 @@ import string
 # Answer extraction
 # ---------------------------------------------------------------------------
 
+def _strip_markdown_formatting(s: str) -> str:
+    """Strip markdown bold/italic markers (*, _) from start and end of a string.
+
+    Agents sometimes wrap the FINAL ANSWER marker or the answer itself in
+    markdown formatting (e.g. "**FINAL ANSWER:** answer" or "FINAL ANSWER: **answer**").
+    The regex captures the trailing markers as part of the answer — strip them here.
+    """
+    s = s.strip()
+    # Strip leading markdown markers: *, **, ***, _, __, ___
+    s = re.sub(r"^[_*]{1,3}\s*", "", s)
+    # Strip trailing markdown markers
+    s = re.sub(r"\s*[_*]{1,3}$", "", s)
+    return s.strip()
+
+
 def _extract_final_answer(text: str) -> str:
     """Extract the answer from agent output containing 'FINAL ANSWER: ...'.
 
@@ -40,6 +55,8 @@ def _extract_final_answer(text: str) -> str:
         m = re.search(pat, text.strip(), re.IGNORECASE | re.DOTALL)
         if m:
             answer = m.group(1).strip()
+            # Strip markdown bold/italic markers captured by the regex
+            answer = _strip_markdown_formatting(answer)
             # Strip trailing period if the answer is not a sentence
             if answer.endswith(".") and len(answer) < 80:
                 answer = answer[:-1].strip()
