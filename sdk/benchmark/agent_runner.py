@@ -476,6 +476,29 @@ def _build_vlm_model():
     )
 
 
+def _build_llm_model():
+    """Construct an OpenAILongContextModel instance for AnalyzeTextFileTool.
+
+    Mirrors the production path in file_management_service.get_llm_model()
+    which correctly passes a model *object* (not a string) to the tool.
+    """
+    api_url = os.getenv("LLM_API_URL")
+    api_key = os.getenv("LLM_API_KEY")
+    model_name = os.getenv("LLM_MODEL_NAME")
+    if not all([api_url, api_key, model_name]):
+        return None
+    from nexent.core.models.openai_long_context_model import OpenAILongContextModel
+    max_tokens = os.getenv("LLM_MAX_TOKENS")
+    return OpenAILongContextModel(
+        observer=MessageObserver(),
+        model_id=model_name,
+        api_base=api_url,
+        api_key=api_key,
+        max_context_tokens=int(max_tokens) if max_tokens else 128000,
+        ssl_verify=False,
+    )
+
+
 def _build_analyze_tool_metadata(class_name: str) -> dict:
     """Construct metadata dict for Analyze* tools from environment variables.
 
@@ -490,7 +513,9 @@ def _build_analyze_tool_metadata(class_name: str) -> dict:
         metadata["storage_client"] = storage_client
 
     if class_name == "AnalyzeTextFileTool":
-        metadata["llm_model"] = os.getenv("LLM_MODEL_NAME", "")
+        llm_model = _build_llm_model()
+        if llm_model:
+            metadata["llm_model"] = llm_model
         data_process_url = os.getenv("DATA_PROCESS_SERVICE")
         if data_process_url:
             metadata["data_process_service_url"] = data_process_url
