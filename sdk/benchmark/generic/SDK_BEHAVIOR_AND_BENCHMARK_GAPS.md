@@ -324,23 +324,21 @@ tools 可以形成 component。
 - trace 聚合 compression calls/tokens/cache；
 - estimated uncompressed tokens；
 - 部分 trace score。
+- 每次实际模型调用的 `agent.final_context` 事件，包括 purpose、message/tool/system/history/final-answer
+  prompt fingerprint、message role 结构、selected component types、stable/dynamic message count；
+- stable prefix fingerprint/change reasons、context overhead、pre/post compression tokens；
+- compression records（不包含自由格式 details）、summary fingerprint/fallback 和 observation truncation evidence。
 
 尚未稳定记录或关联：
 
-- 每次实际模型调用的完整/脱敏 `FinalContext`；
-- final tools/schema；
-- selected component types；
-- stable/dynamic message count；
-- stable prefix fingerprint/change reasons；
-- compression records 和 boundary；
-- previous/current summary；
-- summary fallback；
-- pre/post compression tokens；
-- context overhead；
+- debug run 的完整脱敏 `FinalContext` 或外部 artifact reference；
+- summary 和大型 observation 的外部 artifact；
+- compression boundary；
 - soft/hard budget 和 overflow；
-- observation truncation evidence。
 
-因此现有指标能证明“发生过压缩”，但通常不能证明“某条事实在哪个阶段丢失”。
+`context_evidence_diff.py` 可以按 item、step 和 purpose 对齐 A/B/C 导出的
+`agent.final_context` 属性，报告首次 system/tool/history/summary/truncation/final-answer
+prompt 差异。默认观测不包含消息、summary、tool schema 或 compression details 原文。
 
 ### G8. 配置覆盖和复现链仍不完整
 
@@ -400,7 +398,7 @@ Manifest 会记录差异，但没有统一 runtime-independent policy，也没�
 - dataset 非空和 item ID 唯一检查；
 - A/B/C run name 防覆盖；
 - 每轮 manifest 非目标字段 parity；
-- 报告只统计三组共同出现的 item。
+- A/B/C 配对前要求三组 item ID 集合完全一致。
 
 缺少：
 
@@ -412,8 +410,8 @@ Manifest 会记录差异，但没有统一 runtime-independent policy，也没�
 - manifest 与每条 trace 的 resolved config 对账；
 - incomplete run 状态。
 
-当前 `paired_outcomes()` 使用三组 item ID 交集。若某组丢 item，该 item 会被排除，而不是让整轮
-integrity 失败。这意味着现有 comparison report 不能单独证明 run 完整。
+当前轻量校验可以阻止某组缺失或多出 item 时继续配对，但不检查 trace/score/empty output 等完整性，
+因此 comparison report 仍不能单独证明整个 run 完整。
 
 ### G12. 工具依赖预检需要人工声明
 
@@ -488,7 +486,7 @@ Comparison runner 支持重复传入：
 | G4 | 待处理 | item 仍为 `history=[]` 的 isolated lifecycle |
 | G5 | 部分完成 | 基础 components 已构造；生产动态组件和 per-step evidence 缺失 |
 | G6 | 已修复 | custom prompt 能正确进入 Managed runtime |
-| G7 | 部分完成 | 基础 compression metrics 已有；归因证据缺失 |
+| G7 | 部分完成 | 默认安全 FinalContext 证据和首次差异工具已具备；完整脱敏 artifact、budget/overflow 尚缺 |
 | G8 | 部分完成 | manifest 和 parity 已有；export/replay/integrity 不完整 |
 | G9 | 待处理 | 参数存在但实际串行 |
 | G10 | 待处理 | Legacy/Managed observation policy 不公平 |

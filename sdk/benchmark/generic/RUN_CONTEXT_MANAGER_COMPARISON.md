@@ -241,6 +241,26 @@ gaia-cm-20260720-formal-r01-c-managed-compression
 
 如果非目标字段不一致，脚本停止并报告 manifest parity failure。
 
+## FinalContext 首次差异
+
+SDK 会在每次实际模型调用前写入 `agent.final_context` span event。默认只记录 hash、
+message role 结构、组件、token、summary fallback、compression record 计数信息和 observation
+截断标志，不记录原始 prompt、tool schema、summary 或 observation。
+
+将 A/B/C 的 event attributes 导出为 JSON 数组，并为每行补充 `item_id`、`step_number`
+和 `purpose` 后，可定位每对 run 的首次输入差异：
+
+```bash
+python sdk/benchmark/generic/context_evidence_diff.py \
+  --group A=/tmp/a-final-context.json \
+  --group B=/tmp/b-final-context.json \
+  --group C=/tmp/c-final-context.json
+```
+
+输出区分 system message、tool schema/order、history、summary replacement、observation
+truncation 和 final-answer prompt；若一侧缺少对应模型调用，则报告
+`model_call_presence_diff`。
+
 ## 输出文件
 
 单个 run 的 manifest：

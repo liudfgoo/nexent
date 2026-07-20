@@ -374,6 +374,10 @@ Additional Args:
             current_run_start_idx=self._history_step_count,
             tools=self._context_tools(),
         )
+        get_monitoring_manager().record_final_context_evidence(
+            final_context.evidence,
+            step_number=self.step_number,
+        )
         input_messages = final_context.messages
         chars_per_token = self.context_runtime.chars_per_token
         # Baseline for the per-step compression ratio. ``final_context.messages``
@@ -936,6 +940,10 @@ You have been provided with these additional arguments, that you can access usin
             tools=self._context_tools(),
             task=task,
             final_answer_templates=self.prompt_templates,
+        )
+        get_monitoring_manager().record_final_context_evidence(
+            final_context.evidence,
+            step_number=self.step_number,
         )
         messages = final_context.messages
 

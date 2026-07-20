@@ -6,3 +6,4 @@ __pycache__/
 *.log
 .omo/
 /datasets/gaia_level1/
+/artifacts

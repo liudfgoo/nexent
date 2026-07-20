@@ -1,12 +1,77 @@
 """Legacy context path: Jinja prompt plus the original AgentMemory assembly."""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Sequence
 
 from ..contracts import ContextEvidence, FinalContext
 
 
 LEGACY_MAX_OBSERVATION_LENGTH = 100_000
+
+
+def _normalize(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize(item)
+            for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalize(item) for item in value]
+    if hasattr(value, "model_dump"):
+        return _normalize(value.model_dump())
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, (str, int, float, bool)):
+        return enum_value
+    if hasattr(value, "__dict__"):
+        return _normalize({
+            key: item
+            for key, item in vars(value).items()
+            if not key.startswith("_")
+        })
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return {"__class__": f"{value.__class__.__module__}.{value.__class__.__qualname__}"}
+
+
+def _fingerprint(value: Any) -> str:
+    payload = json.dumps(_normalize(value), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _message_role(message: Any) -> str:
+    role = message.get("role") if isinstance(message, dict) else getattr(message, "role", "")
+    return str(getattr(role, "value", role))
+
+
+def _message_text(message: Any) -> str:
+    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+    if isinstance(content, list):
+        return "".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
+    return str(content or "")
+
+
+def _evidence(messages: list[Any], tools: list[Any], purpose: str) -> ContextEvidence:
+    message_tokens = int(sum(len(_message_text(message)) for message in messages) / 1.5)
+    system_messages = [message for message in messages if _message_role(message) == "system"]
+    history_messages = [message for message in messages if _message_role(message) != "system"]
+    return ContextEvidence(
+        purpose=purpose,
+        dynamic_message_count=len(messages),
+        messages_fingerprint=_fingerprint(messages),
+        tools_fingerprint=_fingerprint(tools),
+        system_messages_fingerprint=_fingerprint(system_messages),
+        history_messages_fingerprint=_fingerprint(history_messages),
+        final_answer_prompt_fingerprint=(
+            _fingerprint([messages[0], messages[-1]]) if purpose == "final_answer" and messages else None
+        ),
+        message_roles=tuple(_message_role(message) for message in messages),
+        history_message_roles=tuple(_message_role(message) for message in history_messages),
+        pre_compression_tokens=message_tokens,
+        post_compression_tokens=message_tokens,
+        observation_truncated=any("Output truncated to " in _message_text(message) for message in messages),
+    )
 
 
 class LegacyContextRuntime:
@@ -29,10 +94,11 @@ class LegacyContextRuntime:
     ) -> FinalContext:
         del model, current_run_start_idx
         messages = self._messages_from_memory(memory)
+        canonical_tools = list(tools or ())
         return FinalContext(
             messages=messages,
-            tools=list(tools or ()),
-            evidence=ContextEvidence(dynamic_message_count=len(messages)),
+            tools=canonical_tools,
+            evidence=_evidence(messages, canonical_tools, "step"),
         )
 
     def prepare_final_answer(
@@ -70,10 +136,11 @@ class LegacyContextRuntime:
                 }],
             )
         )
+        canonical_tools = list(tools or ())
         return FinalContext(
             messages=messages,
-            tools=list(tools or ()),
-            evidence=ContextEvidence(dynamic_message_count=len(messages)),
+            tools=canonical_tools,
+            evidence=_evidence(messages, canonical_tools, "final_answer"),
         )
 
     def truncate_observation(self, memory_step: Any) -> None:

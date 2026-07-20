@@ -504,6 +504,13 @@ class ContextManager:
         ]
 
         self._last_compressed_token_count = self._msg_token_count(messages) + self._estimate_tools_tokens(tools)
+        original_history_messages = self._without_leading_stable_messages(original_messages)
+        pre_compression_tokens = (
+            self._msg_token_count(original_history_messages)
+            + self._msg_token_count(stable_messages)
+            + self._msg_token_count(dynamic_messages)
+            + self._estimate_tools_tokens(tools)
+        )
 
         fingerprint = self._fingerprint({"messages": stable_messages, "tools": tools})
         component_fingerprints = self._stable_component_fingerprints(
@@ -515,6 +522,18 @@ class ContextManager:
         reasons = self._change_reasons(fingerprint, component_fingerprints)
         self._previous_stable_fingerprint = fingerprint
         self._previous_stable_components = component_fingerprints
+        summary = self.export_summary()
+        previous_summary = summary.get("previous_summary")
+        current_summary = summary.get("current_summary")
+        previous_cache_info = summary.get("previous_cache_info") or {}
+        current_cache_info = summary.get("current_cache_info") or {}
+        message_roles = tuple(message_role(message) for message in messages)
+        observation_truncated = any(
+            "Output truncated to " in extract_message_text(message)
+            or "Truncated recent action steps:" in extract_message_text(message)
+            or "Context fallback, Truncated raw history:" in extract_message_text(message)
+            for message in messages
+        )
 
         from ...context_runtime.contracts import ContextEvidence, FinalContext
 
@@ -522,12 +541,36 @@ class ContextManager:
             messages=messages,
             tools=tools,
             evidence=ContextEvidence(
+                purpose=purpose,
                 selected_component_types=run_context.selected_component_types,
                 stable_message_count=len(stable_messages),
                 dynamic_message_count=len(messages) - len(stable_messages),
                 compression_records=tuple(self._step_local_log or ()),
                 stable_prefix_fingerprint=fingerprint,
                 prefix_change_reasons=tuple(reasons),
+                messages_fingerprint=self._fingerprint(messages),
+                tools_fingerprint=self._fingerprint(tools),
+                system_messages_fingerprint=self._fingerprint(stable_messages),
+                history_messages_fingerprint=self._fingerprint(history_messages),
+                final_answer_prompt_fingerprint=(
+                    self._fingerprint([*purpose_stable, *purpose_dynamic])
+                    if purpose == "final_answer"
+                    else None
+                ),
+                message_roles=message_roles,
+                history_message_roles=tuple(message_role(message) for message in history_messages),
+                context_overhead_tokens=context_overhead_tokens,
+                pre_compression_tokens=pre_compression_tokens,
+                post_compression_tokens=self._last_compressed_token_count,
+                previous_summary_fingerprint=(
+                    self._fingerprint(previous_summary) if previous_summary else None
+                ),
+                current_summary_fingerprint=(
+                    self._fingerprint(current_summary) if current_summary else None
+                ),
+                previous_summary_fallback=bool(previous_cache_info.get("is_fallback")),
+                current_summary_fallback=bool(current_cache_info.get("is_fallback")),
+                observation_truncated=observation_truncated,
             ),
         )
 

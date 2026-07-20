@@ -206,12 +206,31 @@ def fetch_run_results(
 
 def paired_outcomes(group_results: dict[str, dict[str, bool]]) -> dict[str, Any]:
     """Build the paired A/B/C outcome matrix for one repeat."""
-    common_ids = set.intersection(
-        *(set(results) for results in group_results.values())
-    )
+    item_ids = {
+        key: set(results)
+        for key, results in group_results.items()
+    }
+    if not item_ids or any(not ids for ids in item_ids.values()):
+        raise ValueError("A/B/C paired results must all be non-empty")
+    reference_key = next(iter(item_ids))
+    reference_ids = item_ids[reference_key]
+    mismatches = {
+        key: {
+            "missing": sorted(reference_ids - ids),
+            "unexpected": sorted(ids - reference_ids),
+        }
+        for key, ids in item_ids.items()
+        if ids != reference_ids
+    }
+    if mismatches:
+        raise ValueError(
+            "A/B/C dataset item IDs do not match: "
+            + json.dumps(mismatches, ensure_ascii=False, sort_keys=True)
+        )
+
     matrix: dict[str, int] = {}
     items = []
-    for item_id in sorted(common_ids):
+    for item_id in sorted(reference_ids):
         pattern = "".join(
             "P" if group_results[key][item_id] else "F"
             for key in ("A", "B", "C")
@@ -219,7 +238,7 @@ def paired_outcomes(group_results: dict[str, dict[str, bool]]) -> dict[str, Any]
         matrix[pattern] = matrix.get(pattern, 0) + 1
         items.append({"item_id": item_id, "A": pattern[0], "B": pattern[1], "C": pattern[2]})
     return {
-        "paired_item_count": len(common_ids),
+        "paired_item_count": len(reference_ids),
         "outcome_matrix": matrix,
         "items": items,
     }
