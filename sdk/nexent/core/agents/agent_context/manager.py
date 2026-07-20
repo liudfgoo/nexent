@@ -644,35 +644,73 @@ class ContextManager:
         )
 
     @staticmethod
-    def _normalize_for_fingerprint(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {
-                str(key): ContextManager._normalize_for_fingerprint(item)
-                for key, item in sorted(value.items(), key=lambda item: str(item[0]))
-            }
-        if isinstance(value, (list, tuple)):
-            return [ContextManager._normalize_for_fingerprint(item) for item in value]
-        if hasattr(value, "model_dump"):
-            return ContextManager._normalize_for_fingerprint(value.model_dump())
-        name = getattr(value, "name", None)
-        if isinstance(name, str) and name:
-            return {"__class__": value.__class__.__name__, "name": name}
-        if hasattr(value, "__dict__"):
-            public_attrs = {
-                key: item for key, item in vars(value).items()
-                if not key.startswith("_")
-            }
-            if public_attrs:
-                return ContextManager._normalize_for_fingerprint(public_attrs)
+    def _normalize_for_fingerprint(
+        value: Any,
+        _active_ids: Optional[set[int]] = None,
+        _depth: int = 0,
+    ) -> Any:
         if isinstance(value, (str, int, float, bool)) or value is None:
             return value
-        return {
-            "__class__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
-        }
+        class_name = f"{value.__class__.__module__}.{value.__class__.__qualname__}"
+        if _depth >= 32:
+            return {"__max_depth__": class_name}
+
+        active_ids = _active_ids if _active_ids is not None else set()
+        value_id = id(value)
+        if value_id in active_ids:
+            return {"__cycle__": class_name}
+        active_ids.add(value_id)
+        try:
+            if isinstance(value, dict):
+                return {
+                    str(key): ContextManager._normalize_for_fingerprint(
+                        item, active_ids, _depth + 1
+                    )
+                    for key, item in sorted(
+                        value.items(), key=lambda item: str(item[0])
+                    )
+                }
+            if isinstance(value, (list, tuple)):
+                return [
+                    ContextManager._normalize_for_fingerprint(
+                        item, active_ids, _depth + 1
+                    )
+                    for item in value
+                ]
+            model_dump = getattr(value, "model_dump", None)
+            if callable(model_dump):
+                return ContextManager._normalize_for_fingerprint(
+                    model_dump(), active_ids, _depth + 1
+                )
+            name = getattr(value, "name", None)
+            if isinstance(name, str) and name:
+                return {"__class__": value.__class__.__name__, "name": name}
+            if hasattr(value, "__dict__"):
+                public_attrs = {
+                    key: item for key, item in vars(value).items()
+                    if not key.startswith("_")
+                }
+                if public_attrs:
+                    return ContextManager._normalize_for_fingerprint(
+                        public_attrs, active_ids, _depth + 1
+                    )
+            return {"__class__": class_name}
+        finally:
+            active_ids.remove(value_id)
 
     def _fingerprint(self, messages: Sequence[Any]) -> str:
+        try:
+            normalized = self._normalize_for_fingerprint(messages)
+        except Exception as error:
+            normalized = {
+                "__normalization_error__": type(error).__name__,
+                "__class__": (
+                    f"{messages.__class__.__module__}."
+                    f"{messages.__class__.__qualname__}"
+                ),
+            }
         encoded = json.dumps(
-            self._normalize_for_fingerprint(messages),
+            normalized,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),

@@ -208,3 +208,17 @@ def test_legacy_runtime_truncates_large_observations():
         assert "Output truncated to 100000 characters" in step.observations
     finally:
         _restore(snapshot)
+
+
+def test_legacy_fingerprint_handles_cyclic_runtime_objects():
+    legacy_module, _, snapshot = _bootstrap()
+    try:
+        cyclic = {}
+        cyclic["self"] = cyclic
+
+        fingerprint = legacy_module._fingerprint(cyclic)
+
+        assert len(fingerprint) == 64
+        assert legacy_module._normalize(cyclic)["self"]["__cycle__"] == "builtins.dict"
+    finally:
+        _restore(snapshot)

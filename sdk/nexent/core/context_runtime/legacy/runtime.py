@@ -11,32 +11,59 @@ from ..contracts import ContextEvidence, FinalContext
 LEGACY_MAX_OBSERVATION_LENGTH = 100_000
 
 
-def _normalize(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            str(key): _normalize(item)
-            for key, item in sorted(value.items(), key=lambda item: str(item[0]))
-        }
-    if isinstance(value, (list, tuple)):
-        return [_normalize(item) for item in value]
-    if hasattr(value, "model_dump"):
-        return _normalize(value.model_dump())
-    enum_value = getattr(value, "value", None)
-    if isinstance(enum_value, (str, int, float, bool)):
-        return enum_value
-    if hasattr(value, "__dict__"):
-        return _normalize({
-            key: item
-            for key, item in vars(value).items()
-            if not key.startswith("_")
-        })
+def _normalize(
+    value: Any,
+    _active_ids: set[int] | None = None,
+    _depth: int = 0,
+) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
-    return {"__class__": f"{value.__class__.__module__}.{value.__class__.__qualname__}"}
+    class_name = f"{value.__class__.__module__}.{value.__class__.__qualname__}"
+    if _depth >= 32:
+        return {"__max_depth__": class_name}
+
+    active_ids = _active_ids if _active_ids is not None else set()
+    value_id = id(value)
+    if value_id in active_ids:
+        return {"__cycle__": class_name}
+    active_ids.add(value_id)
+    try:
+        if isinstance(value, dict):
+            return {
+                str(key): _normalize(item, active_ids, _depth + 1)
+                for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+            }
+        if isinstance(value, (list, tuple)):
+            return [
+                _normalize(item, active_ids, _depth + 1)
+                for item in value
+            ]
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            return _normalize(model_dump(), active_ids, _depth + 1)
+        enum_value = getattr(value, "value", None)
+        if isinstance(enum_value, (str, int, float, bool)):
+            return enum_value
+        if hasattr(value, "__dict__"):
+            return _normalize({
+                key: item
+                for key, item in vars(value).items()
+                if not key.startswith("_")
+            }, active_ids, _depth + 1)
+        return {"__class__": class_name}
+    finally:
+        active_ids.remove(value_id)
 
 
 def _fingerprint(value: Any) -> str:
-    payload = json.dumps(_normalize(value), ensure_ascii=False, sort_keys=True)
+    try:
+        normalized = _normalize(value)
+    except Exception as error:
+        normalized = {
+            "__normalization_error__": type(error).__name__,
+            "__class__": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+        }
+    payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

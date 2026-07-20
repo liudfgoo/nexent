@@ -150,6 +150,14 @@ class TestNormalizeForFingerprint:
         result = ContextManager._normalize_for_fingerprint((1, 2, 3))
         assert result == [1, 2, 3]
 
+    def test_cyclic_object_is_bounded(self):
+        cyclic = {}
+        cyclic["self"] = cyclic
+
+        result = ContextManager._normalize_for_fingerprint(cyclic)
+
+        assert result["self"]["__cycle__"] == "builtins.dict"
+
 
 # ── _fingerprint ─────────────────────────────────────────────
 
@@ -159,6 +167,15 @@ class TestFingerprint:
         fp1 = ContextManager()._fingerprint(data)
         fp2 = ContextManager()._fingerprint(data)
         assert fp1 == fp2
+
+    def test_normalization_failure_does_not_break_fingerprint(self):
+        class BrokenDump:
+            def model_dump(self):
+                raise RuntimeError("broken observational payload")
+
+        fingerprint = ContextManager()._fingerprint([BrokenDump()])
+
+        assert len(fingerprint) == 64
 
     def test_different_data_different_fingerprint(self):
         fp1 = ContextManager()._fingerprint([{"role": "system"}])
