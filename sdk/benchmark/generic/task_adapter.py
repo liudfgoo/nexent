@@ -36,6 +36,7 @@ def make_nexent_task(
     input_key: str = "question",
     max_tokens: int = None,
     context_manager_config = None,
+    experiment_time: str = None,
 ):
     """Factory: create a Langfuse task function bound to agent config.
 
@@ -125,6 +126,7 @@ def make_nexent_task(
                 language=language,
                 max_tokens=max_tokens,
                 context_manager_config=context_manager_config,
+                current_time=experiment_time,
             )
 
         # Run agent (sync wrapper for Langfuse's sync task protocol)
@@ -136,7 +138,11 @@ def make_nexent_task(
         finally:
             loop.close()
 
-        system_prompt_text = agent_run_info.agent_config.prompt_templates.get("system_prompt", "") if agent_run_info.agent_config.prompt_templates else ""
+        system_prompt_text = (
+            agent_run_info.agent_config.prompt_templates.get("system_prompt", "")
+            if agent_run_info.agent_config.prompt_templates
+            else ""
+        )
         model_config = agent_run_info.model_config_list[0] if agent_run_info.model_config_list else None
 
         return {
@@ -151,15 +157,29 @@ def make_nexent_task(
             "system_prompt": system_prompt_text,
             "model_config": {
                 "model_name": model_config.model_name if model_config else "",
+                "url": model_config.url if model_config else "",
                 "temperature": model_config.temperature if model_config else None,
                 "max_tokens": model_config.max_tokens if model_config else None,
             } if model_config else {},
             "agent_config": {
                 "name": agent_run_info.agent_config.name,
                 "max_steps": agent_run_info.agent_config.max_steps,
-                "tools": [t.class_name if hasattr(t, "class_name") else str(t) for t in (agent_run_info.agent_config.tools or [])],
-                "managed_agents": [a.name for a in (agent_run_info.agent_config.managed_agents or [])],
-                "context_manager_enabled": context_manager_config is not None and getattr(context_manager_config, "enabled", False),
+                "tools": [
+                    tool.class_name if hasattr(tool, "class_name") else str(tool)
+                    for tool in (agent_run_info.agent_config.tools or [])
+                ],
+                "managed_agents": [
+                    agent.name
+                    for agent in (agent_run_info.agent_config.managed_agents or [])
+                ],
+                "context_manager_enabled": (
+                    context_manager_config is not None
+                    and getattr(context_manager_config, "enabled", False)
+                ),
+                "context_component_types": [
+                    str(getattr(component, "component_type", "unknown"))
+                    for component in (agent_run_info.agent_config.context_components or [])
+                ],
             },
             "compression": {
                 "calls": result.compression_calls,

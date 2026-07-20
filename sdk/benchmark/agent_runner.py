@@ -106,7 +106,8 @@ def build_system_prompt(
     language: str = "zh",
     is_manager: bool = False,
     user_id: str = "",
-    skills: list = None
+    skills: list = None,
+    current_time: str = None,
 ) -> str:
     """
     Build System Prompt
@@ -146,7 +147,7 @@ def build_system_prompt(
         "APP_DESCRIPTION": APP_DESCRIPTION,
         "memory_list": memory_list,
         "knowledge_base_summary": knowledge_base_summary,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "time": current_time or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "user_id": user_id,
         "skills": skills or []
     })
@@ -196,6 +197,7 @@ def build_agent_run_info(
     user_id: str = "",
     skills: list = None,
     max_tokens: Optional[int] = None,
+    current_time: Optional[str] = None,
 ) -> AgentRunInfo:
     """
     Construct AgentRunInfo with template-based system prompt.
@@ -258,7 +260,8 @@ def build_agent_run_info(
             language=language,
             is_manager=is_manager,
             user_id=user_id,
-            skills=skills
+            skills=skills,
+            current_time=current_time,
         )
     else:
         system_prompt = fallback

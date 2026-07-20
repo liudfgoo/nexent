@@ -61,6 +61,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -125,13 +126,15 @@ def upload_jsonl(dataset_name: str, jsonl_path: str,
 
 
 def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
-                   run_name: str, max_concurrency: int = 1):
+                   run_name: str, max_concurrency: int = 1,
+                   manifest_context: dict | None = None,
+                   item_limit: int | None = None):
     """Run experiment using Langfuse v2 SDK: trace → score → link pattern."""
     from langfuse import Langfuse
     lf = Langfuse()
     
     dataset = lf.get_dataset(dataset_name)
-    items = dataset.items
+    items = dataset.items[:item_limit] if item_limit is not None else dataset.items
     n = len(items)
     print(f"  {n} items loaded")
     
@@ -151,6 +154,22 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
     agg_compression_calls = 0
     agg_compression_input_tokens = 0
     agg_compression_cache_hits = 0
+    manifest = None
+    manifest_path = None
+    dataset_item_ids = [str(item.id) for item in items]
+    dataset_version = str(getattr(dataset, "version", "") or "") or None
+
+    if manifest_context is not None:
+        from experiment_manifest import manifest_path
+
+        artifact_path = manifest_path(
+            Path(__file__).parent / "artifacts" / "manifests",
+            run_name,
+        )
+        if artifact_path.exists():
+            raise FileExistsError(
+                f"Run '{run_name}' already has a manifest: {artifact_path}"
+            )
 
     for i, item in enumerate(items):
         q_preview = str(item.input)[:60] if item.input else ""
@@ -167,6 +186,26 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
         except Exception as e:
             print(f"ERROR: {e}")
             output = {"final_answer": "", "errors": [str(e)]}
+
+        if manifest is None and manifest_context is not None:
+            from experiment_manifest import build_manifest, write_manifest_exclusive
+
+            agent_config = output.get("agent_config", {})
+            manifest = build_manifest(
+                dataset_name=dataset_name,
+                dataset_version=dataset_version,
+                dataset_item_ids=dataset_item_ids,
+                run_name=run_name,
+                system_prompt=output.get("system_prompt", ""),
+                model_config=output.get("model_config", {}),
+                agent_config=agent_config,
+                **manifest_context,
+            )
+            manifest_path = write_manifest_exclusive(
+                manifest,
+                Path(__file__).parent / "artifacts" / "manifests",
+            )
+            print(f"\n  Resolved manifest: {manifest_path}")
         
         trace.update(
             output=output,
@@ -177,6 +216,8 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                 "model_config": output.get("model_config", {}),
                 "agent_config": output.get("agent_config", {}),
                 "compression": output.get("compression", {}),
+                "manifest_hash": manifest.get("manifest_hash") if manifest else None,
+                "manifest_path": str(manifest_path) if manifest_path else None,
             },
         )
         
@@ -387,7 +428,7 @@ def main():
     parser.add_argument("--max-steps", type=int,
                         help="Max agent steps (overrides YAML)")
     parser.add_argument("--temperature", type=float,
-                        help="LLM temperature (overrides YAML)")
+                        help="LLM temperature (default: 0.1; exported YAML does not include it)")
     parser.add_argument("--language", type=str, choices=["en", "zh"],
                         help="Prompt language (overrides YAML)")
     parser.add_argument("--duty-prompt", type=str,
@@ -398,24 +439,29 @@ def main():
                         help="Custom few shots prompt (overrides YAML)")
     parser.add_argument("--system-prompt-file", type=str,
                         help="Path to custom system prompt file (bypasses template)")
+    parser.add_argument("--experiment-time", type=str,
+                        help=argparse.SUPPRESS)
     
     # Context manager
-    parser.add_argument("--enable-context-manager", action="store_true",
-                        help="Enable context manager (overrides YAML)")
-    parser.add_argument("--disable-context-manager", action="store_true",
-                        help="Disable context manager (overrides YAML)")
-    parser.add_argument("--token-threshold", type=int,
+    context_group = parser.add_mutually_exclusive_group()
+    context_group.add_argument("--enable-context-manager", action="store_true",
+                               help="Enable context manager (overrides YAML)")
+    context_group.add_argument("--disable-context-manager", action="store_true",
+                               help="Disable context manager (overrides YAML)")
+    parser.add_argument("--token-threshold", type=positive_int,
                         help="Context manager token threshold (SDK default: 10000)")
-    parser.add_argument("--keep-recent-steps", type=int,
+    parser.add_argument("--keep-recent-steps", type=non_negative_int,
                         help="Keep N recent action steps from compression (SDK default: 4)")
-    parser.add_argument("--keep-recent-pairs", type=int,
+    parser.add_argument("--keep-recent-pairs", type=non_negative_int,
                         help="Keep N recent conversation pairs from compression (SDK default: 2)")
-    parser.add_argument("--max-observation-length", type=int,
+    parser.add_argument("--max-observation-length", type=non_negative_int,
                         help="Truncate observations longer than N chars; 0=disabled (SDK default: 0)")
     
     # Execution
-    parser.add_argument("--max-concurrency", type=int, default=1,
+    parser.add_argument("--max-concurrency", type=positive_int, default=1,
                         help="Max parallel agent runs (default: 1)")
+    parser.add_argument("--item-limit", type=positive_int,
+                        help="Run only the first N dataset items (for deterministic smoke tests)")
     parser.add_argument("--run-name", type=str,
                         help="Custom run name (default: auto-generated)")
     
@@ -468,6 +514,19 @@ def main():
         enable_cm = True
     elif args.disable_context_manager:
         enable_cm = False
+
+    if not args.rescore:
+        cm_only_args = {
+            "--token-threshold": args.token_threshold,
+            "--keep-recent-steps": args.keep_recent_steps,
+            "--keep-recent-pairs": args.keep_recent_pairs,
+            "--max-observation-length": args.max_observation_length,
+        }
+        ignored_cm_args = [name for name, value in cm_only_args.items() if value is not None]
+        if not enable_cm and ignored_cm_args:
+            parser.error(
+                f"{', '.join(ignored_cm_args)} require ContextManager to be enabled"
+            )
     
     # Load custom system prompt if provided
     system_prompt = ""
@@ -520,7 +579,7 @@ def main():
             new_run_name=new_run_name
         )
         return
-    
+
     from agent_runner import build_tools_from_yaml
     tools_yaml = agent_config.get("tools", [])
     tools = build_tools_from_yaml(tools_yaml) if tools_yaml else []
@@ -550,6 +609,7 @@ def main():
         language=language,
         input_key=args.input_key,
         context_manager_config=cm_config,
+        experiment_time=args.experiment_time,
         tools=tools,
     )
 
@@ -575,7 +635,41 @@ def main():
         evaluator_fns=evaluator_fns,
         run_name=run_name,
         max_concurrency=args.max_concurrency,
+        item_limit=args.item_limit,
+        manifest_context={
+            "repo_root": Path(__file__).resolve().parents[3],
+            "lifecycle_mode": "isolated-item",
+            "context_manager_config": cm_config,
+            "max_steps": max_steps,
+            "temperature": temperature,
+            "language": language,
+            "max_concurrency": args.max_concurrency,
+            "tools": tools,
+            "evaluator_names": args.evaluators,
+            "observation_policy": {
+                "owner": "managed" if enable_cm else "legacy",
+                "algorithm": "head_tail",
+                "effective_limit_chars": (
+                    cm_config.max_observation_length if enable_cm else 100000
+                ),
+            },
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
+
+
+def non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be greater than or equal to 0")
+    return parsed
 
 
 if __name__ == "__main__":

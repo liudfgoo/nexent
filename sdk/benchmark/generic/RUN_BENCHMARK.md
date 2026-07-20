@@ -49,7 +49,7 @@
 | 参数                     | 说明                      |
 | ---------------------- | ----------------------- |
 | `--max-steps`          | 最大执行步数                  |
-| `--temperature`        | LLM 温度                  |
+| `--temperature`        | LLM 温度；标准导出 YAML 不含该字段，不传时通常使用 `0.1` |
 | `--language`           | 提示语言（`en` / `zh`）       |
 | `--duty-prompt`        | 角色描述 prompt             |
 | `--constraint-prompt`  | 约束条件 prompt             |
@@ -246,6 +246,54 @@ python run_benchmark.py \
 # 4. 在 Langfuse UI 查看结果
 # http://localhost:3100 → Datasets → gsm8k-n10 → Runs
 ```
+
+## ContextManager A/B/C 标准对照
+
+使用 `run_context_manager_comparison.py` 一次执行三组配对实验：
+
+完整参数和运行规范见
+[`RUN_CONTEXT_MANAGER_COMPARISON.md`](./RUN_CONTEXT_MANAGER_COMPARISON.md)。
+
+- A：Legacy；
+- B：Managed，阈值默认 `1000000`，用于隔离 runtime/assembly；
+- C：Managed，阈值默认 `10000`，用于测量正常 compression 效果。
+
+默认先对每组运行一个 item 的 smoke test，再执行正式实验：
+
+```bash
+python sdk/benchmark/generic/run_context_manager_comparison.py \
+  --dataset gaia-level1-web-search \
+  --run-prefix gaia-cm-20260720 \
+  --repeat 3 \
+  --required-url data-process=http://localhost:5010/health \
+  --runner-args \
+    --agent-config path/to/gaia-agent.yaml \
+    --evaluators gaia_exact_match \
+    --max-steps 20 \
+    --temperature 0
+```
+
+关键行为：
+
+- 三组共享 dataset、item 顺序、模型、tools、prompts 和 evaluator；
+- 每轮随机交错 A/B/C 执行顺序，并记录实际顺序；
+- system prompt 模板使用相同实验时间；
+- run name 自动包含 phase、repeat 和组别；
+- 本地或 Langfuse 已存在同名 run 时拒绝启动；
+- smoke 使用相同的前 N 个 item，正式运行可用 `--formal-items` 限制；
+- 每轮运行后校验 resolved manifest 的非目标字段一致；
+- 输出不可覆盖的 JSON 和 Markdown 配对报告。
+
+报告中的比较口径：
+
+```text
+A vs B：Managed/Legacy runtime 与上下文组装差异
+B vs C：真实 LLM 摘要压缩影响
+A vs C：ContextManager 整体产品效果
+```
+
+外部工具依赖通过重复传入 `--required-url NAME=URL` 纳入启动前检查。健康检查返回
+5xx 或无法连接时，任何 Agent/LLM 调用开始前即终止。
 
 ## 输出示例
 

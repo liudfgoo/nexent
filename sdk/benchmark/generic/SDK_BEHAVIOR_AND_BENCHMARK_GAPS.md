@@ -1,240 +1,505 @@
-# Generic Benchmark：真实 SDK 行为与简化项审计
+# Generic Benchmark：真实 SDK 行为与当前差距审计
 
-## 结论
+> 本版基于 2026-07-20 的代码重新审计，已纳入 `run_context_manager_comparison.py`、
+> resolved experiment manifest、CLI 校验和 smoke item limit。
+>
+> 更完整的 ContextManager 实验 readiness 清单见
+> `doc/working/benchmark-generic-opentelemetry-design/benchmark-readiness-gaps-and-next-steps.md`。
 
-当前 Generic Benchmark 不是重新实现一套 Nexent SDK。它由 benchmark 代码模拟平台侧的输入、
-配置构造和结果采集，然后直接调用真实的 Nexent SDK Agent 执行链路。
+## 1. 结论
 
-因此，Agent 核心运行时和启用后的上下文压缩逻辑是真实 SDK 行为，但当前实验尚未完整复现
-Nexent 平台生产环境中的配置加载、多轮会话、上下文组件、工具、子 Agent、容量预算和观测链路。
+Generic Benchmark 没有重新实现 Nexent Agent 或 ContextManager。它用 benchmark 侧代码构造
+`AgentRunInfo`，然后调用真实 Nexent SDK 执行 Agent、模型、工具、ContextRuntime 和压缩流程。
 
-## 实际调用链
+当前最准确的定位是：
+
+> 由 Langfuse dataset 驱动、使用简化平台配置构造器的 Nexent SDK Core benchmark。
+
+它已经具备：
+
+- 真实 SDK Agent/ReAct/工具执行；
+- Legacy 和 Managed ContextRuntime 分流；
+- 真实 ContextManager 压缩；
+- 基础 compression metrics；
+- resolved manifest；
+- Legacy / Managed-No-Compression / Managed-Compression 三组编排；
+- smoke、repeat、配对 item outcome 和 manifest parity 检查。
+
+但它仍不是 Nexent 平台端到端 benchmark，也还不能单靠现有 trace 对 compression loss 作严格归因。
+主要缺口是：
+
+- 每个 dataset item 仍是独立空历史会话；
+- sub-agents 和 skills 虽被导出，但没有进入运行；
+- ContextManager 只有部分参数可配置；
+- FinalContext、summary、compression records 和 budget/overflow 证据未写入 trace；
+- Legacy 与 Managed observation policy 不一致；
+- run integrity 检查不完整；
+- `max_concurrency` 仍未实现。
+
+## 2. 实际调用链
+
+单组运行：
 
 ```text
 Langfuse DatasetItem
+  -> generic/run_benchmark.py
   -> generic/task_adapter.py
   -> benchmark/agent_runner.py 构造 AgentRunInfo
   -> nexent.core.agents.run_agent.agent_run()
   -> NexentAgent.create_single_agent()
   -> CoreAgent.run()
   -> ManagedContextRuntime / LegacyContextRuntime
-  -> ContextManager 组装、预算控制和压缩
-  -> OpenAIModel 调用真实 LLM
+  -> ContextManager 组装、预算控制和可选压缩
+  -> OpenAIModel 和真实工具调用
 ```
 
-## 真实 SDK 行为
+A/B/C 对照：
+
+```text
+run_context_manager_comparison.py
+  -> preflight
+  -> 多次调用 run_benchmark.py
+       A: Legacy
+       B: Managed + 高阈值
+       C: Managed + 正常阈值
+  -> resolved manifest parity
+  -> paired outcome report
+```
+
+## 3. 已确认的真实 SDK 行为
 
 ### R1. Agent 创建和 ReAct 执行循环
 
-Benchmark 最终调用 SDK 的 `agent_run()`，由 `NexentAgent` 创建真实的 `CoreAgent` 和
-`OpenAIModel`，并执行 SDK 的 step、工具调用、观察和最终答案流程。Agent 输出不是 benchmark
-预制或 mock 的。
+`task_adapter.py` 最终调用 `run_agent_with_tracking()`；后者消费真实 `agent_run()` 消息流。
+`NexentAgent` 创建真实 `CoreAgent` 和模型，并执行 step、代码、工具、observation 和 final answer。
+Agent 输出不是 benchmark mock 或预制结果。
 
-相关代码：
+相关文件：
 
-- `sdk/benchmark/generic/task_adapter.py`：调用 `run_agent_with_tracking()`
-- `sdk/benchmark/agent_runner.py`：`run_agent_with_tracking()` 消费真实 `agent_run()` 消息流
-- `sdk/nexent/core/agents/run_agent.py`：创建并运行 `NexentAgent`
-- `sdk/nexent/core/agents/nexent_agent.py`：创建 `CoreAgent` 和模型
+- `sdk/benchmark/generic/task_adapter.py`
+- `sdk/benchmark/agent_runner.py`
+- `sdk/nexent/core/agents/run_agent.py`
+- `sdk/nexent/core/agents/nexent_agent.py`
+- `sdk/nexent/core/agents/core_agent.py`
 
-### R2. 上下文运行时选择
+### R2. ContextRuntime 选择
 
-`NexentAgent.create_single_agent()` 根据 `ContextManagerConfig.enabled` 选择真实 SDK 运行时：
+`NexentAgent.create_single_agent()` 根据 `ContextManagerConfig.enabled` 选择：
 
-- 启用：`ContextManager` + `ManagedContextRuntime`
-- 禁用：`LegacyContextRuntime`
+- 开启：`ContextManager` + `ManagedContextRuntime`；
+- 关闭：`LegacyContextRuntime`。
 
-这不是 benchmark 自己实现的上下文运行时。
+因此 `--enable-context-manager` 和 `--disable-context-manager` 控制的是真实 SDK runtime，
+不是 benchmark 内的模拟分支。
 
-### R3. 每一步上下文组装
+### R3. 每一步和 Final Answer 的上下文组装
 
-`CoreAgent` 在每次模型调用前调用 `context_runtime.prepare_step()`，并将返回的
-`FinalContext.messages` 直接作为模型输入。达到最大步数后生成最终答案时，也会调用
-`context_runtime.prepare_final_answer()`。
+`CoreAgent` 在模型调用前执行：
 
-因此，模型实际看到的消息顺序和内容由 SDK 上下文运行时决定。
+- step：`context_runtime.prepare_step()`；
+- 达到最大步数后的 final answer：`context_runtime.prepare_final_answer()`。
+
+返回的 `FinalContext.messages` 和 `FinalContext.tools` 直接进入模型调用。Managed 路径由
+`ContextManager.assemble_final_context()` 组装，Legacy 路径由原始 memory 组装。
 
 ### R4. ContextManager 压缩
 
-启用 ContextManager 后，`ManagedContextRuntime` 直接调用真实
-`ContextManager.assemble_final_context()`。相关逻辑包括：
+Managed 路径达到阈值时，执行真实 SDK 压缩逻辑，包括：
 
-- token 预算和阈值判断
-- 历史消息分区
-- 保留最近 steps 和 conversation pairs
-- LLM 摘要压缩
-- 增量摘要
-- summary cache
-- 压缩失败后的截断降级
-- 最终上下文组装
+- previous/current history 分区；
+- `keep_recent_steps` 和 `keep_recent_pairs`；
+- LLM summary；
+- incremental summary；
+- summary cache；
+- 压缩失败后的 fallback；
+- 最终上下文重组。
 
-达到压缩条件时，执行的是 SDK 的真实压缩算法及真实摘要模型调用。
+### R5. Observer 和基础指标
 
-### R5. Observer 消息流与基础 token 统计
+Benchmark 从 `MessageObserver` 消费：
 
-Benchmark 通过 SDK 的 `MessageObserver` 消费 `step_count`、`model_output`、
-`execution_logs`、`final_answer` 和 `token_count` 等消息。最终答案和基础 token 数据来自
-真实 Agent 运行过程。
+- `step_count`；
+- `model_output`；
+- `execution_logs`；
+- `final_answer`；
+- `token_count`；
+- error。
 
-## Benchmark 模拟或简化项
+当前能写入 step/trace 的 compression 基础指标包括：
 
-以下项目使用稳定编号，后续整改和验收按编号跟踪。
+- calls；
+- summary input/output tokens；
+- cache hits 和 cache types；
+- compression ratio；
+- uncompressed estimated tokens。
 
-### G1. 平台侧 AgentRunInfo 由 benchmark 手工构造
+### R6. A/B/C 标准编排
 
-`sdk/benchmark/agent_runner.py` 直接从环境变量创建 `ModelConfig`，并手工创建
-`AgentConfig`、`MessageObserver` 和 `AgentRunInfo`。
+`run_context_manager_comparison.py` 已提供：
 
-当前没有经过 backend service、数据库配置解析、模型容量解析等完整生产链路。因此当前测试
-目标更接近 SDK Core，而不是 Nexent 平台端到端运行。
+- A：Legacy；
+- B：Managed + 默认 `token_threshold=1000000`；
+- C：Managed + 默认 `token_threshold=10000`；
+- smoke 和正式 repeat；
+- A/B/C 受控随机交错顺序；
+- 相同 dataset 前 N item smoke；
+- 自动配对 run name；
+- 本地 manifest、Langfuse run 和报告同名保护；
+- primary evaluator 的 paired Pass/Fail outcome matrix。
 
-### G2. 导出的 YAML Agent 配置没有被完整应用
-
-`run_benchmark.py` 当前主要读取：
-
-- prompts
-- `max_steps`
-- `enable_context_manager`
-
-导出配置中的 tools、sub-agents 和 skills 没有被转换为 SDK 配置并传给
-`make_nexent_task()`。当前 Generic Benchmark 通常实际运行的是：
+比较口径已经分开：
 
 ```text
-单 Agent + 无工具 + 无子 Agent + 无技能
+A vs B：runtime/assembly effect
+B vs C：compression effect
+A vs C：ContextManager overall effect
 ```
 
-### G3. ContextManager 只支持启用或禁用
+B 组使用高阈值只是“预期不压缩”，不是算法级 `no_compression` 模式。正式分析仍必须确认
+`compression_calls=0`。
 
-`run_benchmark.py` 当前只构造：
+### R7. Resolved Experiment Manifest
 
-```python
-ContextManagerConfig(enabled=enable_cm)
-```
+每个新 run 会生成本地、不可覆盖的 JSON manifest，并在 Langfuse trace metadata 中记录
+manifest hash 和本地 path。当前内容包括：
 
-其余配置均使用 SDK 默认值，不能从实验配置控制或还原线上参数，例如：
+- dataset name、item IDs 和可用时的 dataset version；
+- run name 和 Git commit；
+- ContextRuntime 和完整 `ContextManagerConfig` dataclass；
+- model、endpoint、temperature、max steps 和 language；
+- tool count/schema hash；
+- system prompt hash；
+- agent config hash；
+- evaluator 名称；
+- lifecycle 和 observation policy；
+- 启动时间和环境标识。
 
-- `token_threshold`
-- soft/hard input budget
-- `keep_recent_steps`
-- `keep_recent_pairs`
-- summary 输入和缩减预算
-- component budgets
-- observation 截断长度
-- 上下文选择策略
+Manifest 会清理 endpoint 凭据、query string 和常见敏感字段。
 
-### G4. 每个数据项都是空历史的独立会话
+### R8. CLI 安全校验和确定性 Smoke
 
-`task_adapter.py` 在构造每次运行时固定传入 `history=[]`。当前可以测试一次 run 内多步 ReAct
-导致的上下文增长和压缩，但不能完整测试：
+当前已有：
 
-- 多轮用户对话
-- 前序 run 的 task/action pair 压缩
-- conversation-level ContextManager 复用
-- 跨请求增量摘要和 cache
+- enable/disable CM 互斥；
+- threshold 必须大于 0；
+- keep recent 和 observation limit 不得为负数；
+- Legacy 不接受 CM-only 参数；
+- `max_concurrency` 和 `item-limit` 必须大于 0；
+- `--item-limit` 对 dataset 前 N 项进行确定性 smoke；
+- comparison run 固定 system prompt 模板使用的实验时间。
 
-### G5. 动态上下文组件未按生产方式组装
+## 4. Benchmark 模拟或简化项
 
-当前没有设置 `AgentConfig.context_components`。长期记忆、知识库摘要、skills、应用上下文和
-Agent definitions 等内容，也没有按照生产链路构造成 ContextManager 组件。
+以下编号作为后续整改的稳定引用。
 
-系统 prompt 主要由 benchmark 提前渲染。因此可以测试消息历史压缩，但不能完整测试组件选择、
-优先级、注入开关和预算分配。
+### G1. 平台侧 AgentRunInfo 仍由 benchmark 手工构造
 
-**已发现的 SDK 级缺陷（已修复）**：当 `context_manager.enabled=True` 且
-`context_components=[]`（benchmark 场景的常见配置）时，`prepare_run_context` 构建的
-`stable_messages` 为空列表。`assemble_final_context` 调用 `_without_leading_stable_messages()`
-从历史消息中剥掉 system prompt，但空的 `stable_messages` 没有将其重新加回。结果：benchmark
-提前渲染的 system prompt（含 few-shot CoT 等内容）被静默丢弃，模型只收到 user message。
+**状态：待处理**
 
-此缺陷在 G6 修复前被掩盖——`--system-prompt-file --enable-context-manager` 因 G6 bug
-降级到 LegacyContextRuntime（后者直接从 `memory.system_prompt` 读取，不受此问题影响）。G6
-修复后正确启用 ManagedContextRuntime，暴露了此缺陷。
+`agent_runner.py` 直接从环境变量创建 `ModelConfig`，并手工创建 `AgentConfig`、
+`MessageObserver` 和 `AgentRunInfo`。它没有经过：
 
-修复：`prepare_run_context` 在 `stable_messages` 为空且 `fallback_system_prompt` 存在时，
-构造 `ChatMessage(role=SYSTEM, content=fallback_system_prompt)` 作为 stable_messages。
+- backend service；
+- 数据库模型配置解析；
+- tenant/user 权限；
+- 模型容量解析；
+- production conversation/run manager；
+- 完整平台观测和异常映射。
 
-### G6. 自定义 system prompt 路径漏传 ContextManager 配置
+因此当前测试目标仍是 SDK Core，而不是 Nexent 平台端到端行为。
 
-使用 `--system-prompt-file` 时，`task_adapter.py` 调用
-`build_agent_run_info_with_custom_prompt()`，但没有传入 `context_manager_config`。
+### G2. 导出的 YAML Agent 配置仅部分应用
 
-因此以下参数组合虽然表面上启用了 ContextManager，实际会使用 LegacyContextRuntime：
+**状态：部分完成**
+
+已经应用：
+
+- prompts；
+- `max_steps`；
+- `enable_context_manager`；
+- tools；
+- 手工添加时的 `temperature`。
+
+tools 已通过 `build_tools_from_yaml()` 重建为 `ToolConfig`。Analyze* 工具可从环境变量构造
+MinIO、VLM、LLM 和 data-process metadata；GAIA 文件可注入 S3 URL。
+
+仍未应用：
+
+- `sub_agents`；
+- `skills`；
+- `provide_run_summary`；
+- `verification_config`；
+- 其他导出或生产 Agent 配置。
+
+依赖 KB、memory 等外部 metadata 的部分工具会被跳过并打印 warning。因此不能再描述成
+“无工具”，但也不能描述成“完整复现导出 Agent”。
+
+### G3. ContextManager 参数只开放了子集
+
+**状态：部分完成**
+
+当前 CLI 可以控制：
+
+- `enabled`；
+- `token_threshold`；
+- `keep_recent_steps`；
+- `keep_recent_pairs`；
+- `max_observation_length`。
+
+其余字段使用 SDK 默认值，尚不能从 YAML/CLI 完整控制，例如：
+
+- soft/hard input budget；
+- summary input/reduce budget；
+- `chars_per_token`；
+- strategy；
+- component budgets；
+- component injection flags；
+- max memory step/chunk；
+- summary prompt/schema；
+- 独立 summary model。
+
+Manifest 会记录最终 dataclass 值，这提高了可追溯性，但不等于这些字段已经可配置。
+
+### G4. 每个 dataset item 仍是空历史独立会话
+
+**状态：待处理**
+
+`task_adapter.py` 两条 Agent 构造路径均固定传入 `history=[]`，每个 item 重新创建 Agent 和
+ContextManager。当前只覆盖单次 run 内 action steps 增长，不能完整验证：
+
+- previous conversation history 压缩；
+- conversation-level ContextManager 复用；
+- 跨请求 incremental summary/cache；
+- `keep_recent_pairs` 的真实多轮行为；
+- run 切换和 conversation 清理；
+- stale state。
+
+Manifest 正确标记当前 lifecycle 为 `isolated-item`，但尚无 `conversation-session` runner。
+
+### G5. Context components 只有基础生产模拟
+
+**状态：部分完成**
+
+Managed 模板路径会调用 `build_context_components()`，custom system prompt 路径会构造
+`SystemPromptComponent`。因此 system prompt 不再因空 components 被剥离，基础 prompts 和
+tools 可以形成 component。
+
+尚未完整覆盖 production 动态组件：
+
+- long-term memory；
+- knowledge base summary；
+- 实际 skills；
+- sub-agent definitions；
+- external A2A agents；
+- tenant/user app context；
+- production relevance、priority 和 budget 输入。
+
+当前 manifest 记录 component type，但每步 `FinalContext.evidence` 尚未进入 benchmark trace。
+
+历史上已修复的 SDK 问题：
+
+- Managed 路径 components 为空时 system prompt 被剥离；
+- custom system prompt 路径未正确启用 Managed runtime。
+
+### G6. Custom system prompt 的 ContextManager 配置漏传
+
+**状态：已修复**
+
+`task_adapter.py` 的 custom prompt 分支已经传入 `context_manager_config`，
+`build_agent_run_info_with_custom_prompt()` 在 CM 开启时创建 `SystemPromptComponent`。
+
+以下组合现在会使用 Managed runtime：
 
 ```bash
 --system-prompt-file path/to/prompt.txt --enable-context-manager
 ```
 
-这是明确的实现缺陷，不只是实验范围简化。
+### G7. Compression metrics 已有，但归因证据仍不完整
 
-### G7. 压缩观测指标没有完整写入实验结果
+**状态：部分完成**
 
-当前 Langfuse 输出主要记录：
+已记录：
 
-- final answer
-- step 数
-- 总输入和输出 token
-- thinking、code 和 observation
+- per-step compression calls/tokens/cache/ratio；
+- trace 聚合 compression calls/tokens/cache；
+- estimated uncompressed tokens；
+- 部分 trace score。
 
-SDK 已提供但 benchmark 尚未完整记录的内容包括：
+尚未稳定记录或关联：
 
-- compression calls
-- summary input/output tokens
-- cache hits 和 cache 类型
-- compression ratio
-- 压缩前后 token 数
-- compression boundary
-- exported summary
-- final context evidence
+- 每次实际模型调用的完整/脱敏 `FinalContext`；
+- final tools/schema；
+- selected component types；
+- stable/dynamic message count；
+- stable prefix fingerprint/change reasons；
+- compression records 和 boundary；
+- previous/current summary；
+- summary fallback；
+- pre/post compression tokens；
+- context overhead；
+- soft/hard budget 和 overflow；
+- observation truncation evidence。
 
-所以压缩逻辑可能真实执行，但仅凭当前实验输出难以验证压缩发生的位置、方式和效果。
+因此现有指标能证明“发生过压缩”，但通常不能证明“某条事实在哪个阶段丢失”。
 
-### G8. 配置覆盖行为与导出配置不完全一致
+### G8. 配置覆盖和复现链仍不完整
 
-当前 `temperature` 没有从 YAML 的 Agent 配置读取；未传 CLI 参数时固定使用 `0.1`。
-其他生产配置也可能在“导出成功”后没有进入执行路径。需要建立导出字段到运行字段的显式映射
-和覆盖优先级测试。
+**状态：部分完成**
 
-### G9. `max_concurrency` 参数当前没有实际并发效果
+已有改进：
 
-`run_experiment()` 接收 `max_concurrency`，但仍通过普通 `for` 循环逐项调用 `task_fn`。
-该问题不影响单次 Agent 运行真实性，但会影响 benchmark 的吞吐测试和参数语义。
+- `temperature` 优先级为 CLI → 手工 YAML → `0.1`；
+- 标准导出 YAML 不包含 temperature 的事实已在文档中说明；
+- comparison runner 建议显式指定 `max_steps`、temperature 和两个 threshold；
+- manifest 记录 resolved CM config、hash、commit 和 dataset item IDs；
+- A/B/C 完成后检查非目标 manifest 字段一致。
 
-## 当前实验可以声称的范围
+仍有缺口：
 
-当前可以准确描述为：
+- `export_agent_config.py` 不导出 temperature 和完整 CM config；
+- 多个导出字段没有进入执行路径；
+- manifest 在第一个 item 执行后才生成；
+- 第一个 task 在构造配置前异常时，manifest 可能缺少有效 model/prompt/agent 字段；
+- manifest 只保存本地 artifact，Langfuse 中只有本地 path/hash；
+- evaluator version 目前只写 `"code_commit"`；
+- summary model 当前按“使用主模型”记录，没有独立解析链；
+- 没有运行结束后的 trace→manifest 反向一致性检查。
 
-> 使用简化的配置构造器和 Langfuse 数据集驱动真实 Nexent SDK CoreAgent，真实执行单 Agent
-> ReAct、模型调用、step 上下文组装以及可选的 ContextManager 压缩。
+### G9. `max_concurrency` 参数仍没有实际并发效果
 
-当前不应描述为：
+**状态：待处理**
 
-> 完整复现 Nexent 平台中的 Agent 创建、完整配置加载、多轮会话、动态上下文组件、工具与子
-> Agent、容量预算和压缩观测链路。
+`run_experiment()` 接收并记录 `max_concurrency`，但仍通过普通 `for` 循环逐项调用 `task_fn`。
+因此：
 
-## 建议整改顺序
+- `--max-concurrency 4` 仍是串行；
+- manifest 中的值是请求值，不是实际观测并发度；
+- 当前不能用它进行吞吐或并发安全性结论。
 
-| 优先级 | 编号 | 原因 | 验收目标 |
-|---|---|---|---|
-| P0 | G6 | 参数声明与实际行为不一致 | 自定义 prompt 路径正确启用 ManagedContextRuntime |
-| P0 | G7 | 无法可靠判断压缩实验结果 | 每一步输出压缩调用、token、cache、比例和边界 |
-| P1 | G3 | 无法控制关键实验变量 | YAML/CLI 可配置完整 ContextManagerConfig |
-| P1 | G4 | 无法测试会话级上下文管理 | 支持多轮数据集和同一 ContextManager 跨 run 复用 |
-| P1 | G5 | 上下文组装覆盖不完整 | 构造并记录真实 context components |
-| P1 | G2 | 导出 Agent 与实际运行不一致 | tools、sub-agents、skills 可加载并执行 |
-| P2 | G8 | 配置可重复性不足 | 所有运行字段有明确来源和覆盖测试 |
-| P2 | G1 | 缺少平台端到端覆盖 | 明确区分 SDK Core 模式与平台集成模式 |
-| P2 | G9 | CLI 参数语义不完整 | `max_concurrency` 被实现或删除 |
+短期至少应在 CLI help 明确标注未实现，长期应实现受控并发、限流和 trace 隔离。
 
-## 整改记录
+### G10. Legacy 与 Managed observation policy 不一致
 
-| 编号 | 状态 | 变更 | 验证 |
-|---|---|---|---|
-| G1 | 待处理 | | |
-| G2 | 已修复 | `agent_runner.py` 新增 `build_tools_from_yaml()` 将 YAML tools 段重建为 `ToolConfig` 对象；Analyze* 工具的 metadata（storage_client、vlm_model、llm_model、data_process_service_url）从环境变量构造；`task_adapter.py` 在 DatasetItem 有 `file_name` 时注入 S3 URL（模仿生产 `create_agent_info.py` 行为）；新增 `upload_gaia_files.py` 预上传附件到 MinIO；`run_benchmark.py` 读取 YAML tools 并传入 `make_nexent_task(tools=...)` | 导出的 YAML 工具配置正确传入 Agent 运行；AnalyzeTextFileTool/AnalyzeImageTool/AnalyzeAudioTool/AnalyzeVideoTool/TerminalTool 可用；文件附件通过 S3 URL 注入 query；依赖外部服务的工具（KB、memory）跳过并打印警告 |
-| G3 | 已修复 | `run_benchmark.py` 新增 `--token-threshold`、`--keep-recent-steps`、`--keep-recent-pairs`、`--max-observation-length` CLI 参数；不传时使用 SDK 默认值；`ContextManagerConfig` 按非 None 字段动态构造 | CLI 可控制压缩阈值、保留步数/对数、observation 截断长度；不传则保持 SDK 默认行为 |
-| G4 | 待处理 | | |
-| G5 | 已修复 | Benchmark 侧构造 context_components：`build_agent_run_info` 在 CM 启用时调用 `build_context_components()` 模拟生产组件；`build_agent_run_info_with_custom_prompt` 将自定义 prompt 包装为 `SystemPromptComponent` | `components=[]` 不再出现，system prompt 不被 `_without_leading_stable_messages` 丢弃 |
-| G6 | 已修复 | `task_adapter.py` 的 custom prompt 分支补传 `context_manager_config` | `--system-prompt-file --enable-context-manager` 正确启用 ManagedContextRuntime（注：修复后暴露了 G5 的 system prompt 丢弃缺陷，G5 已同步修复） |
-| G7 | 已修复 | SDK `agent_run_with_observer` 将 `step_metrics` 中的压缩字段转发到 `token_count` observer 消息；benchmark `AgentRunResult` 新增压缩聚合字段；`run_agent_with_tracking` 解析每步压缩数据；`task_adapter` 输出 `compression` 段；`run_benchmark` 将压缩指标写入 Langfuse trace metadata、step span metadata 和 trace score | 每步输出 compression calls、input/output tokens、cache hits、cache types、ratio；trace 级聚合可对比不同配置 |
-| G8 | 部分修复 | `temperature` 建立 CLI → YAML → 默认值 0.1 的覆盖优先级链 | CLI `--temperature` 覆盖 YAML `agent_config.temperature`，YAML 覆盖硬编码默认值 |
-| G9 | 待处理 | | |
+**状态：待处理**
+
+当前：
+
+- Legacy 固定在 100000 字符保留首尾；
+- Managed 默认 `max_observation_length=0`，即不预截断；
+- Managed 的 CLI limit 不作用于 Legacy。
+
+Manifest 会记录差异，但没有统一 runtime-independent policy，也没有逐 step truncation 指标。
+因此受超长 observation 影响的 A/B/C item 不能把 A/C 差异直接归因于 compression。
+
+### G11. Run integrity 和配对完整性检查仍不充分
+
+**状态：部分完成**
+
+已有：
+
+- dataset 非空和 item ID 唯一检查；
+- A/B/C run name 防覆盖；
+- 每轮 manifest 非目标字段 parity；
+- 报告只统计三组共同出现的 item。
+
+缺少：
+
+- expected item count 与 linked trace count 对账；
+- missing/duplicate trace；
+- missing score；
+- empty output；
+- trace error；
+- manifest 与每条 trace 的 resolved config 对账；
+- incomplete run 状态。
+
+当前 `paired_outcomes()` 使用三组 item ID 交集。若某组丢 item，该 item 会被排除，而不是让整轮
+integrity 失败。这意味着现有 comparison report 不能单独证明 run 完整。
+
+### G12. 工具依赖预检需要人工声明
+
+**状态：部分完成**
+
+Comparison runner 支持重复传入：
+
+```text
+--required-url NAME=URL
+```
+
+它会在 Agent/LLM 调用前检查 URL 连接和 HTTP 5xx，从而提前发现已知服务故障。
+
+但当前不会：
+
+- 从 Agent YAML 自动发现所有依赖；
+- 验证 URL 与工具实际使用 endpoint 一致；
+- 检查非 HTTP 依赖；
+- 检查认证后的真实工具操作；
+- 证明服务在整个实验期间持续健康。
+
+不传时，服务问题可能直到工具构造或首次调用才出现。
+
+## 5. 当前实验可以和不可以声称什么
+
+### 可以声称
+
+> 使用简化配置构造器和 Langfuse dataset 驱动真实 Nexent SDK CoreAgent，真实执行单 Agent
+> ReAct、模型调用、已加载工具、Legacy/Managed 上下文组装及可选 ContextManager 压缩。
+
+使用 comparison runner 且 manifest parity 通过时，还可以声称：
+
+> A/B/C 使用相同 dataset item、代码 commit、模型、system prompt hash、tools、temperature、
+> max steps 和 evaluator 配置；A/B 用于观察 runtime/assembly 差异，B/C 用于观察压缩候选效应。
+
+### 不可以声称
+
+- 完整复现 Nexent 平台端到端 Agent 创建与配置加载；
+- 已覆盖 conversation-level ContextManager；
+- 已执行 YAML 中的 sub-agents 和 skills；
+- B 组一定没有压缩，除非实际确认 `compression_calls=0`；
+- A/C 差异等于 compression effect；
+- 某次失败已经确认是 compression loss；
+- manifest 存在就代表 run 完整；
+- `max_concurrency` 已实现并发；
+- 当前 token 指标等同于完整 provider 计费成本。
+
+## 6. 当前优先整改顺序
+
+完整顺序以 readiness 文档为准。基于本次审计，紧接着应优先处理：
+
+| 顺序 | 对应缺口 | 工作项 |
+|---:|---|---|
+| 1 | G7 | FinalContext、summary、compression records 和 diff evidence |
+| 2 | G10 | runtime-independent observation policy 和 truncation evidence |
+| 3 | G11 | run integrity report，incomplete run 禁止进入配对统计 |
+| 4 | G3 | 完整 resolved ContextManager 配置入口 |
+| 5 | G4 | conversation-session lifecycle |
+| 6 | G2/G5 | sub-agents、skills 和动态 context components |
+| 7 | G8 | export→run 字段映射和 manifest artifact/integrity |
+| 8 | G9 | 实现并发或移除误导参数 |
+| 9 | G12 | 从工具配置自动发现依赖并预检 |
+| 10 | G1 | 增加平台集成模式，与 SDK Core 模式分开 |
+
+## 7. 整改状态汇总
+
+| 编号 | 状态 | 当前结论 |
+|---|---|---|
+| G1 | 待处理 | 仍由 benchmark 手工构造 AgentRunInfo |
+| G2 | 部分完成 | tools 已加载；sub-agents、skills 和其他导出字段未应用 |
+| G3 | 部分完成 | 开放四个核心 CM 参数；完整配置仍不可控 |
+| G4 | 待处理 | item 仍为 `history=[]` 的 isolated lifecycle |
+| G5 | 部分完成 | 基础 components 已构造；生产动态组件和 per-step evidence 缺失 |
+| G6 | 已修复 | custom prompt 能正确进入 Managed runtime |
+| G7 | 部分完成 | 基础 compression metrics 已有；归因证据缺失 |
+| G8 | 部分完成 | manifest 和 parity 已有；export/replay/integrity 不完整 |
+| G9 | 待处理 | 参数存在但实际串行 |
+| G10 | 待处理 | Legacy/Managed observation policy 不公平 |
+| G11 | 部分完成 | 基础 pairing/parity 已有；完整 integrity 未实现 |
+| G12 | 部分完成 | 支持声明式 HTTP 预检；未自动发现工具依赖 |
+
+## 8. 相关文档
+
+- `sdk/benchmark/generic/RUN_BENCHMARK.md`
+- `sdk/benchmark/generic/RUN_CONTEXT_MANAGER_COMPARISON.md`
+- `sdk/benchmark/generic/EXPORT_AGENT_CONFIG.md`
+- `doc/working/benchmark-generic-opentelemetry-design/benchmark-readiness-gaps-and-next-steps.md`
+- `doc/working/benchmark-generic-opentelemetry-design/agent-benchmark-attribution-simple.md`
+- `doc/working/benchmark-generic-opentelemetry-design/agent-benchmark-attribution-full.md`
