@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 from dataclasses import dataclass
@@ -1520,6 +1521,48 @@ def test_agent_run_with_observer_writes_aggregate_context_metrics(nexent_agent_i
     monitoring_manager.set_agent_context_metrics.assert_called_once_with(mock_core_agent.step_metrics)
     monitoring_manager.set_openinference_output.assert_any_call("Final answer")
     mock_print.assert_not_called()
+
+
+def test_agent_run_with_observer_forwards_provider_cache_usage(
+    nexent_agent_instance,
+    mock_core_agent,
+):
+    """Provider cache fields come only from adapter-reported usage."""
+    nexent_agent_instance.agent = mock_core_agent
+    mock_core_agent.stop_event.is_set.return_value = False
+    mock_core_agent.model = types.SimpleNamespace()
+    mock_core_agent.model.last_provider_cache_advice = types.SimpleNamespace(
+        supported=True
+    )
+    mock_core_agent.model.last_prompt_cache_usage = types.SimpleNamespace(
+        metrics_source="openai_prompt_tokens_details",
+        provider_cache_hit=True,
+        cached_input_tokens=40,
+        uncached_input_tokens=60,
+    )
+
+    mock_action_step = MagicMock(spec=ActionStep)
+    mock_action_step.timing = MagicMock(duration=1.0)
+    mock_action_step.step_number = 1
+    mock_action_step.error = None
+    mock_action_step.output = "answer"
+    mock_action_step.token_usage = types.SimpleNamespace(
+        input_tokens=100,
+        output_tokens=5,
+    )
+    mock_core_agent.run.return_value = [mock_action_step]
+
+    nexent_agent_instance.agent_run_with_observer("test query")
+
+    token_payloads = [
+        json.loads(call.args[2])
+        for call in mock_core_agent.observer.add_message.call_args_list
+        if len(call.args) >= 3 and call.args[1] == ProcessType.TOKEN_COUNT
+    ]
+    assert token_payloads[-1]["provider_cache_status"] == "available"
+    assert token_payloads[-1]["provider_cache_hit"] is True
+    assert token_payloads[-1]["provider_cached_input_tokens"] == 40
+    assert token_payloads[-1]["provider_uncached_input_tokens"] == 60
 
 
 def test_agent_run_with_observer_success_with_string_final_answer(nexent_agent_instance, mock_core_agent):

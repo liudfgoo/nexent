@@ -927,6 +927,39 @@ class TestAgentObservability:
             assert event_attrs["context.token_threshold"] == 4096
 
     @patch('sdk.nexent.monitor.monitoring.trace')
+    def test_record_final_context_evidence_adds_content_free_event(self, mock_trace):
+        """FinalContext evidence contains hashes and structure, not raw payloads."""
+        from nexent.core.context_runtime import ContextEvidence
+
+        with patch('sdk.nexent.monitor.monitoring.OPENTELEMETRY_AVAILABLE', True):
+            manager = self._enabled_manager()
+            mock_span = MagicMock()
+            mock_trace.get_current_span.return_value = mock_span
+            evidence = ContextEvidence(
+                purpose="final_answer",
+                selected_component_types=("system_prompt", "memory"),
+                stable_message_count=2,
+                dynamic_message_count=3,
+                messages_fingerprint="message-hash",
+                tools_fingerprint="tool-hash",
+                message_roles=("system", "user"),
+                current_summary_fingerprint="summary-hash",
+                current_summary_fallback=True,
+                observation_truncated=True,
+            )
+
+            manager.record_final_context_evidence(evidence, step_number=4)
+
+            event_name, event_attrs = mock_span.add_event.call_args.args
+            assert event_name == "agent.final_context"
+            assert event_attrs["agent.step.number"] == 4
+            assert event_attrs["context.purpose"] == "final_answer"
+            assert event_attrs["context.messages.fingerprint"] == "message-hash"
+            assert event_attrs["context.summary.current.fallback"] is True
+            assert event_attrs["context.observation.truncated"] is True
+            assert "raw payload" not in json.dumps(event_attrs)
+
+    @patch('sdk.nexent.monitor.monitoring.trace')
     def test_set_agent_context_metrics_adds_aggregate_attributes(self, mock_trace):
         """Agent run spans receive aggregate context/compression metrics."""
         with patch('sdk.nexent.monitor.monitoring.OPENTELEMETRY_AVAILABLE', True):

@@ -198,6 +198,7 @@ def build_agent_run_info(
     skills: list = None,
     max_tokens: Optional[int] = None,
     current_time: Optional[str] = None,
+    model_factory: Optional[str] = None,
 ) -> AgentRunInfo:
     """
     Construct AgentRunInfo with template-based system prompt.
@@ -246,6 +247,7 @@ def build_agent_run_info(
         ssl_verify=False,
         extra_body=THINKING_OFF_EXTRA_BODY,
         max_tokens=max_tokens,
+        model_factory=model_factory,
     )
 
     if duty or constraint or few_shots:
@@ -340,6 +342,7 @@ def build_agent_run_info_with_custom_prompt(
     language: str = "en",
     is_manager: bool = False,
     context_manager_config: Optional[ContextManagerConfig] = None,
+    model_factory: Optional[str] = None,
 ) -> AgentRunInfo:
     """
     Build AgentRunInfo with a pre-rendered system prompt string.
@@ -377,6 +380,7 @@ def build_agent_run_info_with_custom_prompt(
         temperature=temperature,
         ssl_verify=False,
         extra_body=THINKING_OFF_EXTRA_BODY,
+        model_factory=model_factory,
         )
 
     prompt_templates = build_prompt_templates(
@@ -620,7 +624,15 @@ class AgentRunResult:
         self.compression_output_tokens: int = 0
         self.compression_cache_hits: int = 0
         self.compression_cache_types: list = []
+        self.summary_cache_hits: int = 0
+        self.summary_cache_types: list = []
         self.total_uncompressed_est_tokens: int = 0
+        self.provider_cache_available_calls: int = 0
+        self.provider_cache_hit_calls: int = 0
+        self.provider_cached_input_tokens: int = 0
+        self.provider_uncached_input_tokens: int = 0
+        self.provider_cache_statuses: set[str] = set()
+        self.provider_cache_metrics_sources: set[str] = set()
 
     def __repr__(self):
         return f"AgentRunResult(final_answer_len={len(self.final_answer)}, " \
@@ -744,6 +756,15 @@ async def run_agent_with_tracking(
                 for ct in cache_types:
                     if ct not in result.compression_cache_types:
                         result.compression_cache_types.append(ct)
+                summary_cache_types = [
+                    cache_type
+                    for cache_type in cache_types
+                    if cache_type in {"previous_cache_hit", "current_cache_hit"}
+                ]
+                result.summary_cache_hits += len(summary_cache_types)
+                for cache_type in summary_cache_types:
+                    if cache_type not in result.summary_cache_types:
+                        result.summary_cache_types.append(cache_type)
 
                 if current_step is not None:
                     est_ctx = token_data.get("estimated_context_tokens")
@@ -757,13 +778,54 @@ async def run_agent_with_tracking(
                         "calls": token_data.get("compression_calls", 0),
                         "input_tokens": token_data.get("compression_input_tokens", 0),
                         "output_tokens": token_data.get("compression_output_tokens", 0),
-                        "cache_hits": token_data.get("compression_cache_hits", 0),
-                        "cache_types": token_data.get("compression_cache_types", []),
+                        "summary_cache_hits": len(summary_cache_types),
+                        "summary_cache_types": summary_cache_types,
                         "ratio": token_data.get("compression_ratio", 0.0),
                         "uncompressed_est_tokens": token_data.get("uncompressed_est_tokens", 0),
                         "estimated_context_tokens": token_data.get("estimated_context_tokens"),
                         "token_threshold": token_data.get("token_threshold"),
                     }
+                    provider_status = token_data.get(
+                        "provider_cache_status",
+                        "unsupported",
+                    )
+                    provider_cache = {
+                        "status": provider_status,
+                        "metrics_source": token_data.get(
+                            "provider_cache_metrics_source",
+                            "capability_unknown",
+                        ),
+                        "hit": bool(token_data.get("provider_cache_hit", False)),
+                        "cached_input_tokens": token_data.get(
+                            "provider_cached_input_tokens",
+                            0,
+                        ) or 0,
+                        "uncached_input_tokens": token_data.get(
+                            "provider_uncached_input_tokens",
+                            0,
+                        ) or 0,
+                    }
+                    current_step["provider_cache"] = provider_cache
+
+                provider_status = token_data.get("provider_cache_status")
+                if provider_status:
+                    result.provider_cache_statuses.add(provider_status)
+                    metrics_source = token_data.get(
+                        "provider_cache_metrics_source",
+                        "capability_unknown",
+                    )
+                    result.provider_cache_metrics_sources.add(metrics_source)
+                    if provider_status == "available":
+                        result.provider_cache_available_calls += 1
+                        result.provider_cache_hit_calls += int(
+                            bool(token_data.get("provider_cache_hit", False))
+                        )
+                        result.provider_cached_input_tokens += (
+                            token_data.get("provider_cached_input_tokens", 0) or 0
+                        )
+                        result.provider_uncached_input_tokens += (
+                            token_data.get("provider_uncached_input_tokens", 0) or 0
+                        )
             except (json.JSONDecodeError, TypeError):
                 pass
 

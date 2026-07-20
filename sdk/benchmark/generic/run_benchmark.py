@@ -153,7 +153,11 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
     failed = 0
     agg_compression_calls = 0
     agg_compression_input_tokens = 0
-    agg_compression_cache_hits = 0
+    agg_summary_cache_hits = 0
+    agg_provider_cache_available_calls = 0
+    agg_provider_cache_hit_calls = 0
+    agg_provider_cached_tokens = 0
+    agg_provider_input_tokens = 0
     manifest = None
     manifest_path = None
     dataset_item_ids = [str(item.id) for item in items]
@@ -216,6 +220,7 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                 "model_config": output.get("model_config", {}),
                 "agent_config": output.get("agent_config", {}),
                 "compression": output.get("compression", {}),
+                "provider_cache": output.get("provider_cache", {}),
                 "manifest_hash": manifest.get("manifest_hash") if manifest else None,
                 "manifest_path": str(manifest_path) if manifest_path else None,
             },
@@ -248,6 +253,7 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                     metadata={
                         "token_usage": step.get("token_usage"),
                         "compression": step.get("compression"),
+                        "provider_cache": step.get("provider_cache"),
                     },
                 )
         
@@ -286,12 +292,15 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
         compression = output.get("compression", {})
         agg_compression_calls += compression.get("calls", 0)
         agg_compression_input_tokens += compression.get("input_tokens", 0)
-        agg_compression_cache_hits += compression.get("cache_hits", 0)
-        if compression.get("calls", 0) > 0:
+        agg_summary_cache_hits += compression.get("summary_cache_hits", 0)
+        if (
+            compression.get("calls", 0) > 0
+            or compression.get("summary_cache_hits", 0) > 0
+        ):
             trace.score(name="compression_calls", value=compression["calls"])
             trace.score(name="compression_input_tokens", value=compression.get("input_tokens", 0))
             trace.score(name="compression_output_tokens", value=compression.get("output_tokens", 0))
-            trace.score(name="compression_cache_hits", value=compression.get("cache_hits", 0))
+            trace.score(name="summary_cache_hits", value=compression.get("summary_cache_hits", 0))
             total_uncompressed = compression.get("total_uncompressed_est_tokens", 0)
             total_input = output.get("total_input_tokens", 0)
             if total_uncompressed > 0:
@@ -299,6 +308,23 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                     name="compression_token_reduction_pct",
                     value=round((1 - total_input / total_uncompressed) * 100, 1),
                 )
+
+        provider_cache = output.get("provider_cache", {})
+        if provider_cache.get("status") == "available":
+            available_calls = provider_cache.get("available_calls", 0) or 0
+            hit_calls = provider_cache.get("hit_calls", 0) or 0
+            cached_tokens = provider_cache.get("provider_cached_tokens", 0) or 0
+            provider_input_tokens = provider_cache.get("provider_input_tokens", 0) or 0
+            agg_provider_cache_available_calls += available_calls
+            agg_provider_cache_hit_calls += hit_calls
+            agg_provider_cached_tokens += cached_tokens
+            agg_provider_input_tokens += provider_input_tokens
+            trace.score(name="provider_cache_hit_calls", value=hit_calls)
+            trace.score(name="provider_cached_tokens", value=cached_tokens)
+            trace.score(
+                name="provider_cached_input_ratio",
+                value=provider_cache.get("provider_cached_input_ratio", 0.0) or 0.0,
+            )
 
         primary_score = next(iter(item_scores.values()), 0.0)
         if primary_score >= 1.0:
@@ -325,7 +351,22 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
         print(f"  Compression:")
         print(f"    Total calls:        {agg_compression_calls}")
         print(f"    Total input tokens: {agg_compression_input_tokens}")
-        print(f"    Total cache hits:   {agg_compression_cache_hits}")
+        print(f"    Summary cache hits: {agg_summary_cache_hits}")
+    if agg_provider_cache_available_calls:
+        print("  Provider prefix cache:")
+        print(
+            "    Call hit rate:       "
+            f"{agg_provider_cache_hit_calls / agg_provider_cache_available_calls:.2%}"
+        )
+        print(f"    Cached tokens:      {agg_provider_cached_tokens}")
+        print(
+            "    Cached input ratio:  "
+            f"{agg_provider_cached_tokens / agg_provider_input_tokens:.2%}"
+            if agg_provider_input_tokens
+            else "    Cached input ratio:  unavailable"
+        )
+    else:
+        print("  Provider prefix cache: unsupported or metrics unavailable")
     print(f"\nView in Langfuse: {os.environ.get('LANGFUSE_HOST', '')}/dataset/{dataset.id}")
     print(f"{'='*60}")
 
@@ -429,6 +470,14 @@ def main():
                         help="Max agent steps (overrides YAML)")
     parser.add_argument("--temperature", type=float,
                         help="LLM temperature (default: 0.1; exported YAML does not include it)")
+    parser.add_argument(
+        "--model-factory",
+        type=str,
+        help=(
+            "Explicit provider capability identifier used for cache metrics "
+            "(for example: openai); unknown providers remain unsupported"
+        ),
+    )
     parser.add_argument("--language", type=str, choices=["en", "zh"],
                         help="Prompt language (overrides YAML)")
     parser.add_argument("--duty-prompt", type=str,
@@ -507,6 +556,7 @@ def main():
     max_steps = args.max_steps or agent_cfg.get("max_steps", 10)
     temperature = args.temperature if args.temperature is not None else agent_cfg.get("temperature", 0.1)
     language = args.language or "en"
+    model_factory = args.model_factory or agent_cfg.get("model_factory")
     
     # Context manager
     enable_cm = agent_cfg.get("enable_context_manager", False)
@@ -611,6 +661,7 @@ def main():
         context_manager_config=cm_config,
         experiment_time=args.experiment_time,
         tools=tools,
+        model_factory=model_factory,
     )
 
     run_name = args.run_name or f"{args.dataset}-{int(time.time())}"
@@ -619,6 +670,7 @@ def main():
     print(f"  Max steps:    {max_steps}")
     print(f"  Temperature:  {temperature}")
     print(f"  Language:     {language}")
+    print(f"  Model factory:{model_factory or 'unknown'}")
     print(f"  Context mgr:  {enable_cm}")
     if enable_cm:
         print(f"  CM config:    threshold={cm_config.token_threshold}, "

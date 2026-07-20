@@ -46,6 +46,25 @@ def test_known_provider_profile_is_structured_and_unknown_provider_is_disabled()
     assert resolve_prompt_cache_profile("unrecognized-provider") is None
 
 
+def test_deepseek_profile_and_native_cache_usage_fields():
+    profile = resolve_prompt_cache_profile("deepseek")
+    result = extract_prompt_cache_usage(
+        {
+            "prompt_tokens": 349,
+            "prompt_cache_hit_tokens": 256,
+            "prompt_cache_miss_tokens": 93,
+        },
+        349,
+        capability_profile=profile,
+    )
+
+    assert profile["mode"] == "provider_automatic"
+    assert result.cached_input_tokens == 256
+    assert result.uncached_input_tokens == 93
+    assert result.hit_ratio == pytest.approx(256 / 349, abs=0.0001)
+    assert result.metrics_source == "deepseek_prompt_cache_tokens"
+
+
 def test_provider_cache_advice_uses_profile_only():
     advice = cache_directive_advice({"mode": "openai_automatic", "enabled": True})
     assert advice.supported is True

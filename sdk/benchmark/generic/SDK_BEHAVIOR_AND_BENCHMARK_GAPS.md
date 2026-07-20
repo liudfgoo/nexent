@@ -328,6 +328,8 @@ tools 可以形成 component。
   prompt fingerprint、message role 结构、selected component types、stable/dynamic message count；
 - stable prefix fingerprint/change reasons、context overhead、pre/post compression tokens；
 - compression records（不包含自由格式 details）、summary fingerprint/fallback 和 observation truncation evidence。
+- provider 明确返回的 prefix-cache cached/uncached input tokens、call hit 和 metrics source；
+- provider prefix cache 与 ContextManager summary cache 分字段进入 item/run/comparison 报告。
 
 尚未稳定记录或关联：
 

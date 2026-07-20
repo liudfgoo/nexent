@@ -37,6 +37,7 @@ def make_nexent_task(
     max_tokens: int = None,
     context_manager_config = None,
     experiment_time: str = None,
+    model_factory: str = None,
 ):
     """Factory: create a Langfuse task function bound to agent config.
 
@@ -111,6 +112,7 @@ def make_nexent_task(
                 temperature=temperature,
                 language=language,
                 context_manager_config=context_manager_config,
+                model_factory=model_factory,
             )
         else:
             agent_run_info = build_agent_run_info(
@@ -127,6 +129,7 @@ def make_nexent_task(
                 max_tokens=max_tokens,
                 context_manager_config=context_manager_config,
                 current_time=experiment_time,
+                model_factory=model_factory,
             )
 
         # Run agent (sync wrapper for Langfuse's sync task protocol)
@@ -160,6 +163,7 @@ def make_nexent_task(
                 "url": model_config.url if model_config else "",
                 "temperature": model_config.temperature if model_config else None,
                 "max_tokens": model_config.max_tokens if model_config else None,
+                "model_factory": model_config.model_factory if model_config else None,
             } if model_config else {},
             "agent_config": {
                 "name": agent_run_info.agent_config.name,
@@ -185,13 +189,47 @@ def make_nexent_task(
                 "calls": result.compression_calls,
                 "input_tokens": result.compression_input_tokens,
                 "output_tokens": result.compression_output_tokens,
-                "cache_hits": result.compression_cache_hits,
-                "cache_types": result.compression_cache_types,
+                "summary_cache_hits": result.summary_cache_hits,
+                "summary_cache_types": result.summary_cache_types,
                 "total_uncompressed_est_tokens": result.total_uncompressed_est_tokens,
             },
+            "provider_cache": _provider_cache_result(result),
         }
 
     return task
+
+
+def _provider_cache_result(result: AgentRunResult) -> dict:
+    """Build provider-reported prefix-cache metrics without inferred hits."""
+    available_calls = result.provider_cache_available_calls
+    cached_tokens = result.provider_cached_input_tokens
+    uncached_tokens = result.provider_uncached_input_tokens
+    provider_input_tokens = cached_tokens + uncached_tokens
+    statuses = sorted(result.provider_cache_statuses)
+    if available_calls:
+        status = "available"
+    elif "unavailable" in statuses:
+        status = "unavailable"
+    else:
+        status = "unsupported"
+    return {
+        "status": status,
+        "available_calls": available_calls,
+        "hit_calls": result.provider_cache_hit_calls,
+        "provider_prefix_hit_rate": (
+            round(result.provider_cache_hit_calls / available_calls, 4)
+            if available_calls
+            else None
+        ),
+        "provider_cached_tokens": cached_tokens,
+        "provider_input_tokens": provider_input_tokens,
+        "provider_cached_input_ratio": (
+            round(cached_tokens / provider_input_tokens, 4)
+            if provider_input_tokens
+            else None
+        ),
+        "metrics_sources": sorted(result.provider_cache_metrics_sources),
+    }
 
 
 def make_run_evaluators(metric_names: list[str] = None):

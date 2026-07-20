@@ -187,6 +187,11 @@ def test_legacy_runtime_does_not_require_context_manager():
 
         assert runtime.context_manager is None
         assert final.messages == [{"role": "system", "content": "legacy prompt"}]
+        assert final.evidence.purpose == "step"
+        assert final.evidence.messages_fingerprint
+        assert final.evidence.system_messages_fingerprint
+        assert final.evidence.message_roles == ("system",)
+        assert final.evidence.pre_compression_tokens == final.evidence.post_compression_tokens
     finally:
         _restore(snapshot)
 

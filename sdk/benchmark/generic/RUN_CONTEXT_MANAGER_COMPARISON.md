@@ -284,7 +284,9 @@ JSON 包含：
 - 每轮实际执行顺序；
 - manifest parity 结果；
 - 每个配对 item 的 A/B/C Pass/Fail；
-- outcome matrix。
+- outcome matrix；
+- A/B/C provider prefix cache hit rate、cached tokens 和 cached input ratio；
+- 与 provider cache 分开展示的 ContextManager summary cache hits/types。
 
 Markdown 输出八种结果组合：
 
@@ -294,6 +296,9 @@ PPP PPF PFP PFF FPP FPF FFP FFF
 
 其中 `PPF` 表示 A、B 成功而 C 失败，只能作为 compression-loss 候选，不能在缺少
 FinalContext diff 和反事实验证时直接确认根因。
+
+Provider prefix cache 只使用 provider 明确返回的 `cached_tokens` 或等价 usage 字段。
+报告中的 `N/A` 表示 `unsupported` 或 `unavailable`，不等于已支持但命中率为 0%。
 
 ## 常用运行方式
 

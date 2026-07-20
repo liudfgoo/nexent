@@ -594,6 +594,53 @@ class NexentAgent:
                             "token_threshold": token_threshold,
                         }
 
+                        # Provider prompt/KV cache metrics are distinct from
+                        # ContextManager summary-cache reuse. Only forward
+                        # values explicitly reported by the provider adapter.
+                        active_model = getattr(self.agent, "model", None)
+                        cache_usage = getattr(
+                            active_model,
+                            "last_prompt_cache_usage",
+                            None,
+                        )
+                        cache_advice = getattr(
+                            active_model,
+                            "last_provider_cache_advice",
+                            None,
+                        )
+                        if cache_usage is not None:
+                            metrics_source = getattr(
+                                cache_usage,
+                                "metrics_source",
+                                "capability_unknown",
+                            )
+                            metrics_available = metrics_source not in {
+                                "none",
+                                "capability_unknown",
+                            }
+                            capability_supported = bool(
+                                getattr(cache_advice, "supported", False)
+                            )
+                            token_data.update({
+                                "provider_cache_status": (
+                                    "available"
+                                    if metrics_available
+                                    else "unavailable"
+                                    if capability_supported
+                                    else "unsupported"
+                                ),
+                                "provider_cache_metrics_source": metrics_source,
+                                "provider_cache_hit": bool(
+                                    getattr(cache_usage, "provider_cache_hit", False)
+                                ),
+                                "provider_cached_input_tokens": int(
+                                    getattr(cache_usage, "cached_input_tokens", 0) or 0
+                                ),
+                                "provider_uncached_input_tokens": int(
+                                    getattr(cache_usage, "uncached_input_tokens", 0) or 0
+                                ),
+                            })
+
                         # Forward compression stats from step_metrics when available
                         if last_metric:
                             compression = last_metric.get("compression", {})

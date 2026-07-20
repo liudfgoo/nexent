@@ -115,6 +115,7 @@ def build_manifest(
         "summary_uses_main_model": True,
         "model_endpoint": model_endpoint,
         "model_provider": _provider_from_endpoint(model_endpoint),
+        "model_factory": model_config.get("model_factory"),
         "temperature": temperature,
         "max_steps": max_steps,
         "language": language,

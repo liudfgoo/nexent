@@ -336,6 +336,32 @@ View in Langfuse: http://localhost:3100/dataset/xxx
 ============================================================
 ```
 
+每个 trace output 和 step metadata 分开记录两类缓存：
+
+- `compression.summary_cache_hits` / `summary_cache_types`：ContextManager 本地摘要复用；
+- `provider_cache`：provider 明确返回的 prompt/KV prefix cache usage。
+
+`summary_cache_hits` 只统计 `previous_cache_hit` 和 `current_cache_hit`；
+未调用压缩模型的 `stable_bypass` 不等同于复用已有 summary，因而不计入。
+
+`provider_cache.status` 的语义：
+
+- `available`：provider 返回了可信 cache token 字段，可计算 hit rate 和 cached input ratio；
+- `unavailable`：provider capability 已知，但本次响应没有 cache metrics；
+- `unsupported`：当前 provider capability 未声明支持。
+
+只有 `available` 调用进入 `provider_prefix_hit_rate` 的分母。`unavailable` 和
+`unsupported` 不会按 0% 命中处理，也不会通过 estimated/API token 差值推断。
+
+运行 DeepSeek 官方接口时应显式声明：
+
+```bash
+--model-factory deepseek
+```
+
+OpenAI 官方接口使用 `--model-factory openai`。未知 provider 默认是 `unsupported`；
+benchmark 不会仅凭 OpenAI-compatible URL 擅自启用。
+
 ## 重新评分输出示例
 
 ```

@@ -60,6 +60,11 @@ def test_context_manager_assembles_stable_dynamic_and_history_messages():
     assert final.evidence.stable_message_count == 1
     assert final.evidence.dynamic_message_count == 3
     assert final.evidence.stable_prefix_fingerprint
+    assert final.evidence.messages_fingerprint
+    assert final.evidence.tools_fingerprint
+    assert final.evidence.message_roles == ("system", "user", "user", "user")
+    assert final.evidence.purpose == "step"
+    assert final.evidence.pre_compression_tokens >= final.evidence.post_compression_tokens
     assert final.tools == [{"name": "a"}, {"name": "z"}]
 
 
@@ -99,6 +104,7 @@ def test_context_manager_owns_final_answer_assembly():
         "answer task: original task",
     ]
     assert final.evidence.stable_message_count == 2
+    assert final.evidence.purpose == "final_answer"
     assert "context_purpose" in final.evidence.prefix_change_reasons or (
         final.evidence.prefix_change_reasons == ("initial_request",)
     )

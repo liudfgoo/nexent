@@ -204,6 +204,127 @@ def fetch_run_results(
     return results
 
 
+def fetch_run_provider_cache(
+    langfuse: Any,
+    dataset_name: str,
+    run_name: str,
+) -> dict[str, dict[str, Any]]:
+    """Fetch provider-reported prefix-cache metrics from benchmark trace outputs."""
+    run = langfuse.get_dataset_run(dataset_name, run_name)
+    results = {}
+    for run_item in run.dataset_run_items:
+        trace = langfuse.get_trace(run_item.trace_id)
+        output = trace.output
+        if isinstance(output, str):
+            try:
+                output = json.loads(output)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                output = {}
+        provider_cache = (
+            output.get("provider_cache", {})
+            if isinstance(output, dict)
+            else {}
+        )
+        results[str(run_item.dataset_item_id)] = provider_cache
+    return results
+
+
+def fetch_run_summary_cache(
+    langfuse: Any,
+    dataset_name: str,
+    run_name: str,
+) -> dict[str, dict[str, Any]]:
+    """Fetch ContextManager summary-cache metrics separately from provider cache."""
+    run = langfuse.get_dataset_run(dataset_name, run_name)
+    results = {}
+    for run_item in run.dataset_run_items:
+        trace = langfuse.get_trace(run_item.trace_id)
+        output = trace.output
+        if isinstance(output, str):
+            try:
+                output = json.loads(output)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                output = {}
+        compression = output.get("compression", {}) if isinstance(output, dict) else {}
+        results[str(run_item.dataset_item_id)] = {
+            "summary_cache_hits": compression.get("summary_cache_hits", 0) or 0,
+            "summary_cache_types": compression.get("summary_cache_types", []) or [],
+        }
+    return results
+
+
+def aggregate_summary_cache(
+    item_metrics: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate ContextManager-local summary reuse."""
+    cache_types = sorted({
+        cache_type
+        for metric in item_metrics.values()
+        for cache_type in metric.get("summary_cache_types", [])
+    })
+    return {
+        "summary_cache_hits": sum(
+            metric.get("summary_cache_hits", 0) or 0
+            for metric in item_metrics.values()
+        ),
+        "summary_cache_types": cache_types,
+    }
+
+
+def aggregate_provider_cache(
+    item_metrics: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate only calls for which provider cache metrics were explicit."""
+    available_calls = sum(
+        metric.get("available_calls", 0) or 0
+        for metric in item_metrics.values()
+        if metric.get("status") == "available"
+    )
+    hit_calls = sum(
+        metric.get("hit_calls", 0) or 0
+        for metric in item_metrics.values()
+        if metric.get("status") == "available"
+    )
+    cached_tokens = sum(
+        metric.get("provider_cached_tokens", 0) or 0
+        for metric in item_metrics.values()
+        if metric.get("status") == "available"
+    )
+    provider_input_tokens = sum(
+        metric.get("provider_input_tokens", 0) or 0
+        for metric in item_metrics.values()
+        if metric.get("status") == "available"
+    )
+    statuses = sorted({
+        metric.get("status", "unsupported")
+        for metric in item_metrics.values()
+    })
+    if available_calls:
+        status = "available"
+    elif "unavailable" in statuses:
+        status = "unavailable"
+    else:
+        status = "unsupported"
+    return {
+        "status": status,
+        "item_count": len(item_metrics),
+        "available_calls": available_calls,
+        "hit_calls": hit_calls,
+        "provider_prefix_hit_rate": (
+            round(hit_calls / available_calls, 4)
+            if available_calls
+            else None
+        ),
+        "provider_cached_tokens": cached_tokens,
+        "provider_input_tokens": provider_input_tokens,
+        "provider_cached_input_ratio": (
+            round(cached_tokens / provider_input_tokens, 4)
+            if provider_input_tokens
+            else None
+        ),
+    }
+
+
 def paired_outcomes(group_results: dict[str, dict[str, bool]]) -> dict[str, Any]:
     """Build the paired A/B/C outcome matrix for one repeat."""
     item_ids = {
@@ -264,6 +385,7 @@ def validate_manifest_parity(run_names: dict[str, str]) -> dict[str, Any]:
         "main_model",
         "summary_model",
         "model_endpoint",
+        "model_factory",
         "temperature",
         "max_steps",
         "language",
@@ -323,6 +445,41 @@ def write_report_exclusive(report: dict[str, Any], prefix: str) -> tuple[Path, P
             f"| {matrix.get('FPP', 0)} | {matrix.get('FPF', 0)} "
             f"| {matrix.get('FFP', 0)} | {matrix.get('FFF', 0)} |"
         )
+    lines.extend([
+        "",
+        "## Provider prefix cache",
+        "",
+        "| Phase | Repeat | Group | Status | Available calls | Hit calls | Hit rate | Cached tokens | Cached input ratio |",
+        "|---|---:|---|---|---:|---:|---:|---:|---:|",
+    ])
+    for result in report["results"]:
+        for group in ("A", "B", "C"):
+            cache = result["provider_cache"][group]
+            hit_rate = cache["provider_prefix_hit_rate"]
+            cached_ratio = cache["provider_cached_input_ratio"]
+            lines.append(
+                f"| {result['phase']} | {result['repeat_index']} | {group} "
+                f"| {cache['status']} | {cache['available_calls']} "
+                f"| {cache['hit_calls']} "
+                f"| {f'{hit_rate:.2%}' if hit_rate is not None else 'N/A'} "
+                f"| {cache['provider_cached_tokens']} "
+                f"| {f'{cached_ratio:.2%}' if cached_ratio is not None else 'N/A'} |"
+            )
+    lines.extend([
+        "",
+        "## ContextManager summary cache",
+        "",
+        "| Phase | Repeat | Group | Hits | Types |",
+        "|---|---:|---|---:|---|",
+    ])
+    for result in report["results"]:
+        for group in ("A", "B", "C"):
+            cache = result["summary_cache"][group]
+            lines.append(
+                f"| {result['phase']} | {result['repeat_index']} | {group} "
+                f"| {cache['summary_cache_hits']} "
+                f"| {', '.join(cache['summary_cache_types']) or 'none'} |"
+            )
     with markdown_path.open("x", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
     return json_path, markdown_path
@@ -458,6 +615,26 @@ def main() -> None:
             )
             for key, run_name in run_names.items()
         }
+        provider_cache = {
+            key: aggregate_provider_cache(
+                fetch_run_provider_cache(
+                    langfuse,
+                    args.dataset,
+                    run_name,
+                )
+            )
+            for key, run_name in run_names.items()
+        }
+        summary_cache = {
+            key: aggregate_summary_cache(
+                fetch_run_summary_cache(
+                    langfuse,
+                    args.dataset,
+                    run_name,
+                )
+            )
+            for key, run_name in run_names.items()
+        }
         report["results"].append(
             {
                 "phase": phase,
@@ -466,6 +643,8 @@ def main() -> None:
                 "execution_order": [group.key for group in ordered_groups],
                 "manifest_parity": validate_manifest_parity(run_names),
                 "paired": paired_outcomes(group_results),
+                "provider_cache": provider_cache,
+                "summary_cache": summary_cache,
             }
         )
 
