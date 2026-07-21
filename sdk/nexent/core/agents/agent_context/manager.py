@@ -537,6 +537,17 @@ class ContextManager:
 
         from ...context_runtime.contracts import ContextEvidence, FinalContext
 
+        soft_budget = self._soft_input_budget_tokens()
+        hard_budget = self._hard_input_budget_tokens()
+        history_budget = max(0, soft_budget - context_overhead_tokens)
+        prev_fallback = bool(previous_cache_info.get("is_fallback"))
+        curr_fallback = bool(current_cache_info.get("is_fallback"))
+        step_log = self._step_local_log or ()
+        compression_attempted = any(
+            getattr(record, "call_type", "") not in ("stable_bypass",)
+            for record in step_log
+        )
+
         return FinalContext(
             messages=messages,
             tools=tools,
@@ -545,7 +556,7 @@ class ContextManager:
                 selected_component_types=run_context.selected_component_types,
                 stable_message_count=len(stable_messages),
                 dynamic_message_count=len(messages) - len(stable_messages),
-                compression_records=tuple(self._step_local_log or ()),
+                compression_records=tuple(step_log),
                 stable_prefix_fingerprint=fingerprint,
                 prefix_change_reasons=tuple(reasons),
                 messages_fingerprint=self._fingerprint(messages),
@@ -562,14 +573,21 @@ class ContextManager:
                 context_overhead_tokens=context_overhead_tokens,
                 pre_compression_tokens=pre_compression_tokens,
                 post_compression_tokens=self._last_compressed_token_count,
+                soft_budget_tokens=soft_budget,
+                hard_budget_tokens=hard_budget,
+                history_budget_tokens=history_budget,
+                soft_budget_exceeded=pre_compression_tokens > soft_budget,
+                hard_budget_exceeded=self._last_compressed_token_count > hard_budget,
+                compression_attempted=compression_attempted,
+                fallback_compaction_used=prev_fallback or curr_fallback,
                 previous_summary_fingerprint=(
                     self._fingerprint(previous_summary) if previous_summary else None
                 ),
                 current_summary_fingerprint=(
                     self._fingerprint(current_summary) if current_summary else None
                 ),
-                previous_summary_fallback=bool(previous_cache_info.get("is_fallback")),
-                current_summary_fallback=bool(current_cache_info.get("is_fallback")),
+                previous_summary_fallback=prev_fallback,
+                current_summary_fallback=curr_fallback,
                 observation_truncated=observation_truncated,
             ),
         )

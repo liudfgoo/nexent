@@ -160,3 +160,50 @@ def test_context_manager_reports_multiple_stable_change_reasons():
 
     assert "tool_schema_version" in second.evidence.prefix_change_reasons
     assert "system_prompt_version" in second.evidence.prefix_change_reasons
+
+
+def test_context_manager_records_budget_and_overflow_fields():
+    manager = ContextManager(ContextManagerConfig(enabled=True, token_threshold=10000))
+    manager.register_component(SystemPromptComponent(content="stable policy"))
+    memory = _Memory()
+
+    manager.prepare_run_context(memory=memory, fallback_system_prompt="legacy")
+    memory.steps.append(_Step("user", "current task"))
+    final = manager.assemble_final_context(
+        model=None,
+        memory=memory,
+        current_run_start_idx=0,
+    )
+
+    evidence = final.evidence
+    assert evidence.soft_budget_tokens == 10000
+    assert evidence.hard_budget_tokens == 11000
+    assert evidence.history_budget_tokens == 10000 - evidence.context_overhead_tokens
+    assert evidence.soft_budget_exceeded is False
+    assert evidence.hard_budget_exceeded is False
+    assert evidence.compression_attempted is False
+    assert evidence.fallback_compaction_used is False
+
+
+def test_context_manager_soft_budget_exceeded_flag():
+    manager = ContextManager(ContextManagerConfig(
+        enabled=True,
+        token_threshold=5,
+        keep_recent_steps=0,
+        keep_recent_pairs=0,
+    ))
+    manager.register_component(SystemPromptComponent(content="stable policy"))
+    memory = _Memory()
+
+    manager.prepare_run_context(memory=memory, fallback_system_prompt="legacy")
+    for i in range(6):
+        memory.steps.append(_Step("user", f"message content number {i} with padding text"))
+        memory.steps.append(_Step("assistant", f"response content number {i} with padding text"))
+
+    final = manager.assemble_final_context(
+        model=None,
+        memory=memory,
+        current_run_start_idx=0,
+    )
+
+    assert final.evidence.soft_budget_exceeded is True

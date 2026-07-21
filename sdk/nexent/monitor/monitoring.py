@@ -1380,6 +1380,21 @@ class MonitoringManager:
             "context.tokens.overhead": getattr(evidence, "context_overhead_tokens", 0),
             "context.tokens.pre_compression": getattr(evidence, "pre_compression_tokens", 0),
             "context.tokens.post_compression": getattr(evidence, "post_compression_tokens", 0),
+            "context.budget.soft": getattr(evidence, "soft_budget_tokens", 0),
+            "context.budget.hard": getattr(evidence, "hard_budget_tokens", 0),
+            "context.budget.history": getattr(evidence, "history_budget_tokens", 0),
+            "context.budget.soft_exceeded": bool(
+                getattr(evidence, "soft_budget_exceeded", False)
+            ),
+            "context.budget.hard_exceeded": bool(
+                getattr(evidence, "hard_budget_exceeded", False)
+            ),
+            "context.compression.attempted": bool(
+                getattr(evidence, "compression_attempted", False)
+            ),
+            "context.compression.fallback_compaction": bool(
+                getattr(evidence, "fallback_compaction_used", False)
+            ),
             "context.summary.previous.fingerprint": (
                 getattr(evidence, "previous_summary_fingerprint", "") or ""
             ),

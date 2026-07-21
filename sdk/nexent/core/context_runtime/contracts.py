@@ -27,6 +27,13 @@ class ContextEvidence:
     context_overhead_tokens: int = 0
     pre_compression_tokens: int = 0
     post_compression_tokens: int = 0
+    soft_budget_tokens: int = 0
+    hard_budget_tokens: int = 0
+    history_budget_tokens: int = 0
+    soft_budget_exceeded: bool = False
+    hard_budget_exceeded: bool = False
+    compression_attempted: bool = False
+    fallback_compaction_used: bool = False
     previous_summary_fingerprint: str | None = None
     current_summary_fingerprint: str | None = None
     previous_summary_fallback: bool = False

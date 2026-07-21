@@ -87,6 +87,7 @@ def build_manifest(
 ) -> dict[str, Any]:
     """Build a manifest from final effective values, not raw CLI inputs."""
     cm_config = _jsonable(context_manager_config)
+    _resolve_cm_budget_defaults(cm_config)
     enabled = bool(cm_config.get("enabled", False))
     runtime = "managed" if enabled else "legacy"
     tool_payload = _tool_schema_payload(tools)
@@ -262,3 +263,27 @@ def _provider_from_endpoint(endpoint: str) -> str:
         if provider in lowered:
             return provider
     return "unknown"
+
+
+def _resolve_cm_budget_defaults(cm_config: dict[str, Any]) -> None:
+    """Replace zero-default budget fields with their resolved runtime values.
+
+    ``ContextManagerConfig`` uses ``0`` as a sentinel meaning "derive from
+    token_threshold".  ``ContextManager`` resolves these at runtime via
+    ``_soft_input_budget_tokens`` / ``_hard_input_budget_tokens`` etc.
+    The manifest must record the resolved values so historical runs remain
+    reproducible even if the derivation logic changes later.
+    """
+    threshold = cm_config.get("token_threshold") or 0
+    if threshold <= 0:
+        return
+
+    _resolvable = {
+        "soft_input_budget_tokens": threshold,
+        "hard_input_budget_tokens": int(threshold * 1.1),
+        "max_summary_input_tokens": int(threshold * 1.2),
+        "max_summary_reduce_tokens": int(threshold * 0.2),
+    }
+    for field, resolved in _resolvable.items():
+        if not cm_config.get(field):
+            cm_config[field] = resolved

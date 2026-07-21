@@ -50,6 +50,7 @@ backend/.venv/bin/python \
   --runner-args \
     --agent-config path/to/gaia-agent.yaml \
     --evaluators gaia_exact_match \
+    --model-factory openai \
     --max-steps 20 \
     --temperature 0
 ```
@@ -162,6 +163,7 @@ formal repeat 3：A + B + C              3 个 run
 | `--temperature` | CLI → 手工 YAML `agent_config.temperature` → `0.1` | 正式实验显式指定，确定性实验推荐 `0` |
 | `--language` | `en` | 按实验 prompt 显式指定 |
 | `--system-prompt-file` | 无 | 使用预渲染 system prompt 时指定 |
+| `--model-factory` | CLI → YAML `agent_config.model_factory` → 未设置 | 显式指定 provider capability；需要统计 provider prefix cache 时不要省略 |
 | `--max-concurrency` | `1` | 当前 `run_benchmark.py` 尚未真正并发，建议保持 `1` |
 | `--keep-recent-steps` | SDK 默认 `4` | 需要控制压缩策略时显式指定 |
 | `--keep-recent-pairs` | SDK 默认 `2` | conversation benchmark 时显式指定 |
@@ -170,6 +172,25 @@ formal repeat 3：A + B + C              3 个 run
 标准 `export_agent_config.py` 当前不会导出 `temperature`。因此使用标准导出 YAML 且命令行不传
 `--temperature` 时，实际值为代码默认 `0.1`。只有手工在 YAML 的 `agent_config` 中增加
 `temperature`，才会走 YAML 覆盖逻辑。
+
+`--model-factory` 表示 provider 的 capability 标识，而不只是 API 协议类型。未传且 Agent
+YAML 也未配置时，不会默认成 `openai`；resolved manifest 中会记录为 `null`，provider
+prefix cache 状态为 `unsupported`。即使 endpoint 使用 OpenAI-compatible API，也不会仅凭
+响应外形或 API URL 自动推断 provider capability。
+
+当前内置 prompt-cache capability profile 只包括：
+
+| `--model-factory` | Prefix cache usage 解析 |
+|---|---|
+| `openai` | 解析 `usage.prompt_tokens_details.cached_tokens` 等已支持字段 |
+| `deepseek` | 优先解析 `prompt_cache_hit_tokens`，同时兼容 `usage.prompt_tokens_details.cached_tokens` |
+| `dashscope`、`qwen` 或其他值 | 当前未登记，状态为 `unsupported`，不会计算 cached tokens |
+
+DashScope 的 Qwen OpenAI-compatible 接口实测会返回
+`usage.prompt_tokens_details.cached_tokens`。在 `dashscope` capability profile 正式加入代码前，
+若要验证该字段，可临时使用 `--model-factory openai`；正式实验应在 manifest 和报告中注明
+这一兼容映射，避免把 Qwen 的实际 provider 误写成 OpenAI。仅传
+`--model-factory dashscope` 在当前版本中仍不会启用解析。
 
 以下参数由 comparison runner 控制，不能放进 `--runner-args`：
 
@@ -297,8 +318,28 @@ PPP PPF PFP PFF FPP FPF FFP FFF
 其中 `PPF` 表示 A、B 成功而 C 失败，只能作为 compression-loss 候选，不能在缺少
 FinalContext diff 和反事实验证时直接确认根因。
 
-Provider prefix cache 只使用 provider 明确返回的 `cached_tokens` 或等价 usage 字段。
-报告中的 `N/A` 表示 `unsupported` 或 `unavailable`，不等于已支持但命中率为 0%。
+Provider prefix cache 只使用 provider 明确返回的 `cached_tokens` 或等价 usage 字段，并且
+只有 `--model-factory` 对应已登记 capability profile 时才解析。当前支持的字段包括：
+
+```text
+usage.prompt_tokens_details.cached_tokens
+usage.input_tokens_details.cached_tokens
+usage.prompt_cache_hit_tokens
+usage.cached_tokens
+usage.cache_read_input_tokens
+```
+
+其中 Qwen/DashScope OpenAI-compatible API 返回的是
+`usage.prompt_tokens_details.cached_tokens`。第一次相同前缀调用可能明确返回 `0`，后续调用
+缓存生效后返回大于 `0`；两种情况都属于 provider 明确提供指标。报告中的状态应按以下口径
+解释：
+
+- `available` 且 cached tokens 为 `0`：provider 已提供指标，但本次没有命中；
+- `unsupported`：`model_factory` 为空、未知或尚未登记 capability profile；
+- `unavailable`：provider capability 已登记，但本次调用没有得到可用 usage。
+
+报告中的 `N/A` 表示 `unsupported` 或 `unavailable`，不等于已支持但命中率为 0%。不得使用
+本地 token 估算值与 API input tokens 的差值推断 prefix cache。
 
 ## 常用运行方式
 
@@ -347,7 +388,6 @@ backend/.venv/bin/python \
 
 - `required-url` 依赖需要人工声明，尚未从 Agent YAML 自动发现；
 - B 组依靠高阈值实现 No-Compression，运行后仍需确认 `compression_calls=0`；
-- Legacy 与 Managed observation 截断策略仍不同；
 - `max_concurrency` 参数尚未实现真正的 item 并发；
 - 当前报告输出逐 repeat 配对结果，跨 repeat 的置信区间属于后续 P2-2；
 - First Error 和 FinalContext diff 属于后续 P1-3/P1-9。

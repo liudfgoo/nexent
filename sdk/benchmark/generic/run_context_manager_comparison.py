@@ -174,18 +174,17 @@ def fetch_run_results(
     dataset_name: str,
     run_name: str,
     evaluator_name: str,
+    expected_item_ids: list[str] | None = None,
     attempts: int = 10,
 ) -> dict[str, bool]:
-    """Fetch per-item pass/fail results, tolerating short ingestion delays."""
-    run = None
-    for attempt in range(attempts):
-        try:
-            run = langfuse.get_dataset_run(dataset_name, run_name)
-            break
-        except Exception:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(1)
+    """Fetch per-item pass/fail results after all run-item links are visible."""
+    run = fetch_complete_dataset_run(
+        langfuse,
+        dataset_name,
+        run_name,
+        expected_item_ids=expected_item_ids,
+        attempts=attempts,
+    )
 
     results: dict[str, bool] = {}
     for run_item in run.dataset_run_items:
@@ -208,9 +207,15 @@ def fetch_run_provider_cache(
     langfuse: Any,
     dataset_name: str,
     run_name: str,
+    expected_item_ids: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Fetch provider-reported prefix-cache metrics from benchmark trace outputs."""
-    run = langfuse.get_dataset_run(dataset_name, run_name)
+    run = fetch_complete_dataset_run(
+        langfuse,
+        dataset_name,
+        run_name,
+        expected_item_ids=expected_item_ids,
+    )
     results = {}
     for run_item in run.dataset_run_items:
         trace = langfuse.get_trace(run_item.trace_id)
@@ -233,9 +238,15 @@ def fetch_run_summary_cache(
     langfuse: Any,
     dataset_name: str,
     run_name: str,
+    expected_item_ids: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Fetch ContextManager summary-cache metrics separately from provider cache."""
-    run = langfuse.get_dataset_run(dataset_name, run_name)
+    run = fetch_complete_dataset_run(
+        langfuse,
+        dataset_name,
+        run_name,
+        expected_item_ids=expected_item_ids,
+    )
     results = {}
     for run_item in run.dataset_run_items:
         trace = langfuse.get_trace(run_item.trace_id)
@@ -251,6 +262,47 @@ def fetch_run_summary_cache(
             "summary_cache_types": compression.get("summary_cache_types", []) or [],
         }
     return results
+
+
+def fetch_complete_dataset_run(
+    langfuse: Any,
+    dataset_name: str,
+    run_name: str,
+    *,
+    expected_item_ids: list[str] | None,
+    attempts: int = 30,
+    retry_delay: float = 1.0,
+) -> Any:
+    """Wait for Langfuse's eventually consistent dataset-run links to settle."""
+    expected = set(expected_item_ids or [])
+    last_seen: set[str] = set()
+    for attempt in range(attempts):
+        try:
+            run = langfuse.get_dataset_run(dataset_name, run_name)
+        except Exception:
+            if attempt == attempts - 1:
+                raise
+        else:
+            last_seen = {
+                str(run_item.dataset_item_id)
+                for run_item in run.dataset_run_items
+            }
+            if not expected or last_seen == expected:
+                return run
+        if attempt < attempts - 1:
+            time.sleep(retry_delay)
+
+    missing = sorted(expected - last_seen)
+    unexpected = sorted(last_seen - expected)
+    raise TimeoutError(
+        f"Langfuse dataset run '{run_name}' did not expose the complete item set "
+        f"after {attempts} attempts: "
+        + json.dumps(
+            {"missing": missing, "unexpected": unexpected},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
 
 
 def aggregate_summary_cache(
@@ -612,6 +664,7 @@ def main() -> None:
                 args.dataset,
                 run_name,
                 report["evaluator_name"],
+                expected_item_ids=dataset_item_ids[:item_limit],
             )
             for key, run_name in run_names.items()
         }
@@ -621,6 +674,7 @@ def main() -> None:
                     langfuse,
                     args.dataset,
                     run_name,
+                    expected_item_ids=dataset_item_ids[:item_limit],
                 )
             )
             for key, run_name in run_names.items()
@@ -631,6 +685,7 @@ def main() -> None:
                     langfuse,
                     args.dataset,
                     run_name,
+                    expected_item_ids=dataset_item_ids[:item_limit],
                 )
             )
             for key, run_name in run_names.items()

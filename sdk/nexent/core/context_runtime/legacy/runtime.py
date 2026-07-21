@@ -97,6 +97,13 @@ def _evidence(messages: list[Any], tools: list[Any], purpose: str) -> ContextEvi
         history_message_roles=tuple(_message_role(message) for message in history_messages),
         pre_compression_tokens=message_tokens,
         post_compression_tokens=message_tokens,
+        soft_budget_tokens=0,
+        hard_budget_tokens=0,
+        history_budget_tokens=0,
+        soft_budget_exceeded=False,
+        hard_budget_exceeded=False,
+        compression_attempted=False,
+        fallback_compaction_used=False,
         observation_truncated=any("Output truncated to " in _message_text(message) for message in messages),
     )
 
