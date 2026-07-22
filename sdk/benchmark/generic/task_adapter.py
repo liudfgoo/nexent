@@ -38,6 +38,7 @@ def make_nexent_task(
     context_manager_config = None,
     experiment_time: str = None,
     model_factory: str = None,
+    user_id: str = "user_id",
 ):
     """Factory: create a Langfuse task function bound to agent config.
 
@@ -53,6 +54,7 @@ def make_nexent_task(
         managed_agents: Managed sub-agents.
         input_key: Key in DatasetItem.input that contains the question.
         max_tokens: Per-call output token cap.
+        user_id: Stable benchmark user identifier used by prompt/context assembly.
 
     Returns:
         A function compatible with Langfuse's TaskFunction protocol.
@@ -130,6 +132,7 @@ def make_nexent_task(
                 context_manager_config=context_manager_config,
                 current_time=experiment_time,
                 model_factory=model_factory,
+                user_id=user_id,
             )
 
         # Run agent (sync wrapper for Langfuse's sync task protocol)
@@ -180,6 +183,7 @@ def make_nexent_task(
                     context_manager_config is not None
                     and getattr(context_manager_config, "enabled", False)
                 ),
+                "user_id": user_id,
                 "context_component_types": [
                     str(getattr(component, "component_type", "unknown"))
                     for component in (agent_run_info.agent_config.context_components or [])

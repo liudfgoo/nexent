@@ -21,17 +21,17 @@ import string
 # ---------------------------------------------------------------------------
 
 def _strip_markdown_formatting(s: str) -> str:
-    """Strip markdown bold/italic markers (*, _) from start and end of a string.
+    """Strip markdown emphasis or code markers from an extracted answer.
 
     Agents sometimes wrap the FINAL ANSWER marker or the answer itself in
     markdown formatting (e.g. "**FINAL ANSWER:** answer" or "FINAL ANSWER: **answer**").
     The regex captures the trailing markers as part of the answer — strip them here.
     """
     s = s.strip()
-    # Strip leading markdown markers: *, **, ***, _, __, ___
-    s = re.sub(r"^[_*]{1,3}\s*", "", s)
+    # Strip leading markdown markers: *, **, ***, _, __, ___, `, or ```
+    s = re.sub(r"^(?:[_*]{1,3}|`{1,3})\s*", "", s)
     # Strip trailing markdown markers
-    s = re.sub(r"\s*[_*]{1,3}$", "", s)
+    s = re.sub(r"\s*(?:[_*]{1,3}|`{1,3})$", "", s)
     return s.strip()
 
 
@@ -44,22 +44,20 @@ def _extract_final_answer(text: str) -> str:
     if not text:
         return ""
 
-    # Priority 1: "FINAL ANSWER: <answer>" (case-insensitive)
-    # The GAIA constraint prompt requires this exact format.
+    # Priority 1: "FINAL ANSWER: <answer>" (case-insensitive).
+    # The GAIA constraint prompt requires this exact format. Agents may mention
+    # the marker more than once while self-correcting, so extract the text after
+    # the last occurrence instead of letting a DOTALL capture start at the first.
     patterns = [
-        r"FINAL\s*ANSWER\s*:\s*(.+?)$",
-        r"final\s*answer\s*:\s*(.+?)$",
-        r"The\s*(?:final\s*)?answer\s+is\s*:?\s*(.+?)$",
+        r"FINAL\s*ANSWER\s*:\s*",
+        r"The\s*(?:final\s*)?answer\s+is\s*:?\s*",
     ]
     for pat in patterns:
-        m = re.search(pat, text.strip(), re.IGNORECASE | re.DOTALL)
-        if m:
-            answer = m.group(1).strip()
+        matches = list(re.finditer(pat, text.strip(), re.IGNORECASE))
+        if matches:
+            answer = text.strip()[matches[-1].end():].strip()
             # Strip markdown bold/italic markers captured by the regex
             answer = _strip_markdown_formatting(answer)
-            # Strip trailing period if the answer is not a sentence
-            if answer.endswith(".") and len(answer) < 80:
-                answer = answer[:-1].strip()
             return answer
 
     return text.strip()
@@ -130,6 +128,10 @@ def _normalize_string(s: str) -> str:
     s = s.replace("\u2018", "'").replace("\u2019", "'")
     s = s.replace("\u201c", '"').replace("\u201d", '"')
     s = s.replace("\u2013", "-").replace("\u2014", "-")
+    # GAIA answers may include or omit a sentence-final period. Normalize it
+    # symmetrically for predictions and gold answers without changing internal
+    # whitespace or word boundaries (for example, "seagull" != "sea gull").
+    s = re.sub(r"\s*\.$", "", s).strip()
     return s
 
 

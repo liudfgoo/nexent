@@ -662,6 +662,7 @@ def main():
         experiment_time=args.experiment_time,
         tools=tools,
         model_factory=model_factory,
+        user_id="user_id",
     )
 
     run_name = args.run_name or f"{args.dataset}-{int(time.time())}"
