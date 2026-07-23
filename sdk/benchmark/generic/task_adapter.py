@@ -148,7 +148,7 @@ def make_nexent_task(
         system_prompt_text = "\n\n".join(
             str((item.content or {}).get("text", ""))
             for item in context_items
-            if str(getattr(item.type, "value", item.type)) == "system_prompt"
+            if str(getattr(item.type, "value", item.type)) == "system"
         )
         model_config = agent_run_info.model_config_list[0] if agent_run_info.model_config_list else None
 
@@ -205,7 +205,8 @@ def make_nexent_task(
                         "type": str(getattr(item.type, "value", item.type)),
                         "content": item.content,
                         "priority": item.priority,
-                        "required": item.required,
+                        "source": list(item.source),
+                        "metadata": item.metadata,
                     }
                     for item in context_items
                 ],
