@@ -7,15 +7,12 @@ Provides:
 2. AgentRunInfo construction (standard and custom-prompt variants)
 3. Message-stream processing and statistics
 """
-import io
 import json
 import logging
 import os
 import sys
 from typing import Callable, Optional
 
-
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from dotenv import load_dotenv  # noqa: E402
 
@@ -24,7 +21,7 @@ from dotenv import load_dotenv  # noqa: E402
 # Add parent directory to sys.path so paths.py can be found, then import it.
 # paths.py resolves PROJECT_ROOT/SDK_DIR/BACKEND_DIR via .git discovery and
 # injects them into sys.path automatically — no manual path manipulation needed.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import paths  # noqa: E402, F401 - side-effect: adds sdk/, backend/ to sys.path
 from utils.context_utils import build_context_inputs  # noqa: E402
 from utils.prompt_template_utils import get_agent_prompt_template  # noqa: E402
@@ -499,6 +496,8 @@ async def run_agent_with_tracking(
         >>> print(result.message_type_count)
     """
     result = AgentRunResult()
+    current_step = None
+    initial_query = agent_run_info.query
 
     async for chunk in agent_run(agent_run_info):
         if not chunk:
@@ -516,11 +515,47 @@ async def run_agent_with_tracking(
 
             if msg_type == "step_count":
                 result.step_count += 1
+                current_step = {
+                    "step_number": msg_content,
+                    "query": initial_query if result.step_count == 1 else "",
+                    "thinking": "",
+                    "deep_thinking": "",
+                    "main_output": "",
+                    "code": "",
+                    "tool_call": "",
+                    "observation": "",
+                    "token_usage": None,
+                }
+                result.steps.append(current_step)
+
+        if msg_type == "model_output_thinking" and current_step is not None:
+            current_step["thinking"] += msg_content
+        elif msg_type == "model_output_deep_thinking" and current_step is not None:
+            current_step["deep_thinking"] += msg_content
+        elif msg_type == "model_output" and current_step is not None:
+            current_step["main_output"] += msg_content
+        elif msg_type == "model_output_code" and current_step is not None:
+            current_step["code"] += msg_content
+        elif msg_type == "parse" and current_step is not None:
+            current_step["tool_call"] += msg_content
+        elif msg_type == "execution_logs" and current_step is not None:
+            current_step["observation"] += msg_content
 
         # Handle final answer
         if msg_type == "final_answer":
             result.final_answer = msg_content
             result.full_response += msg_content
+            result.steps.append({
+                "step_number": "final_answer",
+                "query": initial_query,
+                "thinking": "",
+                "deep_thinking": "",
+                "main_output": msg_content,
+                "code": "",
+                "tool_call": "",
+                "observation": "",
+                "token_usage": None,
+            })
             if on_final_answer:
                 on_final_answer(msg_content)
 
@@ -540,6 +575,14 @@ async def run_agent_with_tracking(
                 )
                 result.total_api_input_tokens += api_input
                 result.total_output_tokens += token_data.get("step_output_tokens", 0) or 0
+                if current_step is not None:
+                    current_step["token_usage"] = {
+                        "input_tokens": (
+                            token_data.get("estimated_context_tokens") or api_input
+                        ),
+                        "api_input_tokens": api_input,
+                        "output_tokens": token_data.get("step_output_tokens", 0) or 0,
+                    }
                 result.compression_calls += token_data.get("compression_calls", 0) or 0
                 result.compression_input_tokens += token_data.get("compression_input_tokens", 0) or 0
                 result.compression_output_tokens += token_data.get("compression_output_tokens", 0) or 0
@@ -553,6 +596,29 @@ async def run_agent_with_tracking(
                         result.summary_cache_hits += 1
                         if cache_type not in result.summary_cache_types:
                             result.summary_cache_types.append(cache_type)
+                if current_step is not None:
+                    current_step["compression"] = {
+                        "calls": token_data.get("compression_calls", 0) or 0,
+                        "input_tokens": token_data.get("compression_input_tokens", 0) or 0,
+                        "output_tokens": token_data.get("compression_output_tokens", 0) or 0,
+                        "summary_cache_hits": sum(
+                            cache_type in {"previous_cache_hit", "current_cache_hit"}
+                            for cache_type in cache_types
+                        ),
+                        "summary_cache_types": [
+                            cache_type
+                            for cache_type in cache_types
+                            if cache_type in {"previous_cache_hit", "current_cache_hit"}
+                        ],
+                        "ratio": token_data.get("compression_ratio", 0.0),
+                        "uncompressed_est_tokens": token_data.get(
+                            "uncompressed_est_tokens", 0
+                        ),
+                        "estimated_context_tokens": token_data.get(
+                            "estimated_context_tokens"
+                        ),
+                        "token_threshold": token_data.get("token_threshold"),
+                    }
                 provider_status = token_data.get("provider_cache_status")
                 if provider_status:
                     result.provider_cache_statuses.add(provider_status)
@@ -570,6 +636,21 @@ async def run_agent_with_tracking(
                         result.provider_uncached_input_tokens += (
                             token_data.get("provider_uncached_input_tokens", 0) or 0
                         )
+                    if current_step is not None:
+                        current_step["provider_cache"] = {
+                            "status": provider_status,
+                            "metrics_source": token_data.get(
+                                "provider_cache_metrics_source",
+                                "capability_unknown",
+                            ),
+                            "hit": bool(token_data.get("provider_cache_hit", False)),
+                            "cached_input_tokens": token_data.get(
+                                "provider_cached_input_tokens", 0
+                            ) or 0,
+                            "uncached_input_tokens": token_data.get(
+                                "provider_uncached_input_tokens", 0
+                            ) or 0,
+                        }
             except (json.JSONDecodeError, TypeError):
                 pass
 

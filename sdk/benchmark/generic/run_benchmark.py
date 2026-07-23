@@ -191,6 +191,21 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
             print(f"ERROR: {e}")
             output = {"final_answer": "", "errors": [str(e)]}
 
+        required_output_fields = {
+            "agent_config",
+            "compression",
+            "model_config",
+            "provider_cache",
+            "system_prompt",
+        }
+        missing_output_fields = sorted(required_output_fields - output.keys())
+        if missing_output_fields:
+            raise RuntimeError(
+                "Benchmark task output is incomplete; refusing to score or link "
+                f"an invalid run item. Missing: {', '.join(missing_output_fields)}; "
+                f"errors={output.get('errors', [])}"
+            )
+
         if manifest is None and manifest_context is not None:
             from experiment_manifest import build_manifest, write_manifest_exclusive
 
@@ -237,8 +252,10 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                     metadata={"token_usage": step.get("token_usage")},
                 )
             else:
-                trace.span(
-                    name=f"step_{step_num}",
+                token_usage = step.get("token_usage") or {}
+                trace.generation(
+                    name=f"model_step_{step_num}",
+                    model=(output.get("model_config") or {}).get("model_name"),
                     input={
                         "query": step.get("query", ""),
                         "thinking": step.get("thinking", ""),
@@ -250,8 +267,12 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                         "tool_call": step.get("tool_call", ""),
                         "observation": step.get("observation", ""),
                     },
+                    usage_details={
+                        "input": token_usage.get("api_input_tokens", 0) or 0,
+                        "output": token_usage.get("output_tokens", 0) or 0,
+                    },
                     metadata={
-                        "token_usage": step.get("token_usage"),
+                        "token_usage": token_usage,
                         "compression": step.get("compression"),
                         "provider_cache": step.get("provider_cache"),
                     },
