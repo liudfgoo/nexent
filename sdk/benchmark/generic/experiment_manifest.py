@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 SENSITIVE_KEYS = {
     "api_key",
     "authorization",
@@ -88,8 +88,7 @@ def build_manifest(
     """Build a manifest from final effective values, not raw CLI inputs."""
     cm_config = _jsonable(context_manager_config)
     _resolve_cm_budget_defaults(cm_config)
-    enabled = bool(cm_config.get("enabled", False))
-    runtime = "managed" if enabled else "legacy"
+    processing_mode = _processing_mode(cm_config)
     tool_payload = _tool_schema_payload(tools)
     model_endpoint = _sanitize_endpoint(
         model_config.get("url") or model_config.get("base_url") or ""
@@ -108,8 +107,12 @@ def build_manifest(
             "python_version": platform.python_version(),
         },
         "benchmark_lifecycle_mode": lifecycle_mode,
-        "context_runtime": runtime,
-        "context_manager_enabled": enabled,
+        "context_runtime": "context_items",
+        "context_processing_mode": processing_mode,
+        "adaptive_compaction_enabled": processing_mode == "adaptive_compact",
+        "context_policy_fingerprint": sha256_value(
+            (cm_config.get("policy_layers") or {}).get("platform") or {}
+        ),
         "context_manager": cm_config,
         "main_model": model_config.get("model_name", ""),
         "summary_model": model_config.get("model_name", ""),
@@ -127,7 +130,7 @@ def build_manifest(
         "agent_config_hash": sha256_value(agent_config),
         "evaluator_names": evaluator_names,
         "evaluator_version": "code_commit",
-        "context_component_types": agent_config.get("context_component_types", []),
+        "context_item_types": agent_config.get("context_item_types", []),
         "observation_policy": observation_policy,
     }
     manifest["manifest_hash"] = sha256_value(manifest)
@@ -287,3 +290,10 @@ def _resolve_cm_budget_defaults(cm_config: dict[str, Any]) -> None:
     for field, resolved in _resolvable.items():
         if not cm_config.get(field):
             cm_config[field] = resolved
+
+
+def _processing_mode(cm_config: dict[str, Any]) -> str:
+    """Read the resolved platform policy from a serialized config."""
+    layers = cm_config.get("policy_layers") or {}
+    platform_policy = layers.get("platform") or {}
+    return str(platform_policy.get("processing_mode") or "passthrough")

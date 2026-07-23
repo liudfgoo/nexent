@@ -491,20 +491,31 @@ def main():
     parser.add_argument("--experiment-time", type=str,
                         help=argparse.SUPPRESS)
     
-    # Context manager
+    # Context processing policy
     context_group = parser.add_mutually_exclusive_group()
+    context_group.add_argument(
+        "--context-processing-mode",
+        choices=["passthrough", "adaptive_compact"],
+        help="Context processing policy (preferred over legacy enable/disable aliases)",
+    )
     context_group.add_argument("--enable-context-manager", action="store_true",
-                               help="Enable context manager (overrides YAML)")
+                               help="Deprecated alias for --context-processing-mode adaptive_compact")
     context_group.add_argument("--disable-context-manager", action="store_true",
-                               help="Disable context manager (overrides YAML)")
+                               help="Deprecated alias for --context-processing-mode passthrough")
     parser.add_argument("--token-threshold", type=positive_int,
                         help="Context manager token threshold (SDK default: 10000)")
+    parser.add_argument("--soft-input-budget", type=positive_int,
+                        help="Explicit soft input budget in tokens")
+    parser.add_argument("--hard-input-budget", type=positive_int,
+                        help="Explicit hard input budget in tokens")
+    parser.add_argument("--context-window-tokens", type=positive_int,
+                        help="Model context-window capacity recorded by ContextManager")
     parser.add_argument("--keep-recent-steps", type=non_negative_int,
                         help="Keep N recent action steps from compression (SDK default: 4)")
     parser.add_argument("--keep-recent-pairs", type=non_negative_int,
-                        help="Keep N recent conversation pairs from compression (SDK default: 2)")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--max-observation-length", type=non_negative_int,
-                        help="Truncate observations longer than N chars; 0=disabled (SDK default: 0)")
+                        help=argparse.SUPPRESS)
     
     # Execution
     parser.add_argument("--max-concurrency", type=positive_int, default=1,
@@ -558,25 +569,35 @@ def main():
     language = args.language or "en"
     model_factory = args.model_factory or agent_cfg.get("model_factory")
     
-    # Context manager
-    enable_cm = agent_cfg.get("enable_context_manager", False)
+    yaml_enable_cm = agent_cfg.get("enable_context_manager", False)
+    processing_mode = (
+        args.context_processing_mode
+        or ("adaptive_compact" if yaml_enable_cm else "passthrough")
+    )
     if args.enable_context_manager:
-        enable_cm = True
+        processing_mode = "adaptive_compact"
     elif args.disable_context_manager:
-        enable_cm = False
+        processing_mode = "passthrough"
 
     if not args.rescore:
-        cm_only_args = {
-            "--token-threshold": args.token_threshold,
-            "--keep-recent-steps": args.keep_recent_steps,
-            "--keep-recent-pairs": args.keep_recent_pairs,
-            "--max-observation-length": args.max_observation_length,
-        }
-        ignored_cm_args = [name for name, value in cm_only_args.items() if value is not None]
-        if not enable_cm and ignored_cm_args:
+        removed_args = [
+            name
+            for name, value in {
+                "--keep-recent-pairs": args.keep_recent_pairs,
+                "--max-observation-length": args.max_observation_length,
+            }.items()
+            if value is not None
+        ]
+        if removed_args:
             parser.error(
-                f"{', '.join(ignored_cm_args)} require ContextManager to be enabled"
+                f"{', '.join(removed_args)} were removed by the unified ContextItems runtime"
             )
+        if (
+            args.soft_input_budget is not None
+            and args.hard_input_budget is not None
+            and args.soft_input_budget > args.hard_input_budget
+        ):
+            parser.error("--soft-input-budget cannot exceed --hard-input-budget")
     
     # Load custom system prompt if provided
     system_prompt = ""
@@ -637,16 +658,22 @@ def main():
     # Run new experiment
     from task_adapter import make_nexent_task
 
-    from nexent.core.agents.agent_context import ContextManagerConfig
-    cm_kwargs = {"enabled": enable_cm}
+    from nexent.core.agents.context import ContextManagerConfig, PolicyLayers
+    cm_kwargs = {
+        "policy_layers": PolicyLayers(
+            platform={"processing_mode": processing_mode}
+        )
+    }
     if args.token_threshold is not None:
         cm_kwargs["token_threshold"] = args.token_threshold
+    if args.soft_input_budget is not None:
+        cm_kwargs["soft_input_budget_tokens"] = args.soft_input_budget
+    if args.hard_input_budget is not None:
+        cm_kwargs["hard_input_budget_tokens"] = args.hard_input_budget
+    if args.context_window_tokens is not None:
+        cm_kwargs["context_window_tokens"] = args.context_window_tokens
     if args.keep_recent_steps is not None:
         cm_kwargs["keep_recent_steps"] = args.keep_recent_steps
-    if args.keep_recent_pairs is not None:
-        cm_kwargs["keep_recent_pairs"] = args.keep_recent_pairs
-    if args.max_observation_length is not None:
-        cm_kwargs["max_observation_length"] = args.max_observation_length
     cm_config = ContextManagerConfig(**cm_kwargs)
 
     task_fn = make_nexent_task(
@@ -672,12 +699,11 @@ def main():
     print(f"  Temperature:  {temperature}")
     print(f"  Language:     {language}")
     print(f"  Model factory:{model_factory or 'unknown'}")
-    print(f"  Context mgr:  {enable_cm}")
-    if enable_cm:
-        print(f"  CM config:    threshold={cm_config.token_threshold}, "
-              f"keep_steps={cm_config.keep_recent_steps}, "
-              f"keep_pairs={cm_config.keep_recent_pairs}, "
-              f"max_obs_len={cm_config.max_observation_length}")
+    print(f"  Context mode: {processing_mode}")
+    print(f"  CM config:    threshold={cm_config.token_threshold}, "
+          f"soft_budget={cm_config.soft_input_budget_tokens or cm_config.token_threshold}, "
+          f"hard_budget={cm_config.hard_input_budget_tokens or int(cm_config.token_threshold * 1.1)}, "
+          f"keep_steps={cm_config.keep_recent_steps}")
     print(f"  Tools:        {len(tools)} ({', '.join(t.name for t in tools) if tools else 'none'})")
     if duty_prompt:
         print(f"  Duty prompt:  {duty_prompt[:60]}...")
@@ -700,11 +726,8 @@ def main():
             "tools": tools,
             "evaluator_names": args.evaluators,
             "observation_policy": {
-                "owner": "managed" if enable_cm else "legacy",
-                "algorithm": "head_tail",
-                "effective_limit_chars": (
-                    cm_config.max_observation_length if enable_cm else 100000
-                ),
+                "owner": "context_items",
+                "algorithm": "item_representation",
             },
             "started_at": datetime.now(timezone.utc).isoformat(),
         },

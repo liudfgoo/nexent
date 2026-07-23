@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run paired Legacy / Managed-No-Compression / Managed-Compression benchmarks."""
+"""Run paired ContextItems passthrough / adaptive-compaction benchmarks."""
 
 from __future__ import annotations
 
@@ -27,7 +27,10 @@ CONTROLLED_RUNNER_ARGS = {
     "--run-name",
     "--enable-context-manager",
     "--disable-context-manager",
+    "--context-processing-mode",
     "--token-threshold",
+    "--soft-input-budget",
+    "--hard-input-budget",
     "--item-limit",
     "--experiment-time",
 }
@@ -40,27 +43,16 @@ class GroupSpec:
     runner_args: tuple[str, ...]
 
 
-def comparison_groups(
-    no_compression_threshold: int,
-    compression_threshold: int,
-) -> tuple[GroupSpec, ...]:
-    """Return the three standard comparison groups."""
+def comparison_groups(compression_threshold: int) -> tuple[GroupSpec, ...]:
+    """Return the two standard same-code comparison groups."""
     return (
-        GroupSpec("A", "legacy", ("--disable-context-manager",)),
-        GroupSpec(
-            "B",
-            "managed-no-compression",
-            (
-                "--enable-context-manager",
-                "--token-threshold",
-                str(no_compression_threshold),
-            ),
-        ),
+        GroupSpec("P", "passthrough", ("--context-processing-mode", "passthrough")),
         GroupSpec(
             "C",
-            "managed-compression",
+            "adaptive-compact",
             (
-                "--enable-context-manager",
+                "--context-processing-mode",
+                "adaptive_compact",
                 "--token-threshold",
                 str(compression_threshold),
             ),
@@ -378,13 +370,13 @@ def aggregate_provider_cache(
 
 
 def paired_outcomes(group_results: dict[str, dict[str, bool]]) -> dict[str, Any]:
-    """Build the paired A/B/C outcome matrix for one repeat."""
+    """Build the paired P/C outcome matrix for one repeat."""
     item_ids = {
         key: set(results)
         for key, results in group_results.items()
     }
     if not item_ids or any(not ids for ids in item_ids.values()):
-        raise ValueError("A/B/C paired results must all be non-empty")
+        raise ValueError("P/C paired results must all be non-empty")
     reference_key = next(iter(item_ids))
     reference_ids = item_ids[reference_key]
     mismatches = {
@@ -397,19 +389,16 @@ def paired_outcomes(group_results: dict[str, dict[str, bool]]) -> dict[str, Any]
     }
     if mismatches:
         raise ValueError(
-            "A/B/C dataset item IDs do not match: "
+            "P/C dataset item IDs do not match: "
             + json.dumps(mismatches, ensure_ascii=False, sort_keys=True)
         )
 
     matrix: dict[str, int] = {}
     items = []
     for item_id in sorted(reference_ids):
-        pattern = "".join(
-            "P" if group_results[key][item_id] else "F"
-            for key in ("A", "B", "C")
-        )
+        pattern = "".join("P" if group_results[key][item_id] else "F" for key in ("P", "C"))
         matrix[pattern] = matrix.get(pattern, 0) + 1
-        items.append({"item_id": item_id, "A": pattern[0], "B": pattern[1], "C": pattern[2]})
+        items.append({"item_id": item_id, "P": pattern[0], "C": pattern[1]})
     return {
         "paired_item_count": len(reference_ids),
         "outcome_matrix": matrix,
@@ -418,7 +407,7 @@ def paired_outcomes(group_results: dict[str, dict[str, bool]]) -> dict[str, Any]
 
 
 def validate_manifest_parity(run_names: dict[str, str]) -> dict[str, Any]:
-    """Ensure all non-target resolved settings are identical across A/B/C."""
+    """Ensure all non-policy resolved settings are identical across P/C."""
     from experiment_manifest import manifest_path
 
     manifest_dir = ARTIFACT_ROOT / "manifests"
@@ -455,18 +444,35 @@ def validate_manifest_parity(run_names: dict[str, str]) -> dict[str, Any]:
     }
     if mismatches:
         raise RuntimeError(
-            "A/B/C resolved manifest parity failed: "
+            "P/C resolved manifest parity failed: "
             + ", ".join(sorted(mismatches))
         )
+    modes = {key: manifest.get("context_processing_mode") for key, manifest in manifests.items()}
+    if modes != {"P": "passthrough", "C": "adaptive_compact"}:
+        raise RuntimeError(f"P/C processing modes are invalid: {modes}")
+    for key, manifest in manifests.items():
+        if manifest.get("context_runtime") != "context_items":
+            raise RuntimeError(f"{key} did not use the unified ContextItems runtime")
+        config = manifest.get("context_manager") or {}
+        if not config.get("hard_input_budget_tokens"):
+            raise RuntimeError(f"{key} manifest is missing a resolved hard input budget")
+        if not manifest.get("context_policy_fingerprint"):
+            raise RuntimeError(f"{key} manifest is missing a context policy fingerprint")
     return {
         "status": "passed",
         "checked_fields": list(invariant_fields),
         "target_fields": [
-            "context_runtime",
-            "context_manager_enabled",
-            "context_manager.token_threshold",
-            "context_component_types",
-            "observation_policy",
+            "context_processing_mode",
+            "adaptive_compaction_enabled",
+            "context_policy_fingerprint",
+        ],
+        "context_evidence_contract": [
+            "processing_mode",
+            "policy_fingerprint",
+            "hard_budget",
+            "over_hard_budget",
+            "raw_token_estimate",
+            "final_token_estimate",
         ],
     }
 
@@ -482,20 +488,18 @@ def write_report_exclusive(report: dict[str, Any], prefix: str) -> tuple[Path, P
     lines = [
         f"# ContextManager comparison: {prefix}",
         "",
-        "A vs B measures runtime/assembly differences; B vs C measures compression.",
+        "P vs C measures adaptive compaction on the same ContextItems runtime.",
         "",
-        "| Phase | Repeat | Paired | PPP | PPF | PFP | PFF | FPP | FPF | FFP | FFF |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Phase | Repeat | Paired | PP | PF | FP | FF |",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for result in report["results"]:
         matrix = result["paired"]["outcome_matrix"]
         lines.append(
             f"| {result['phase']} | {result['repeat_index']} "
             f"| {result['paired']['paired_item_count']} "
-            f"| {matrix.get('PPP', 0)} | {matrix.get('PPF', 0)} "
-            f"| {matrix.get('PFP', 0)} | {matrix.get('PFF', 0)} "
-            f"| {matrix.get('FPP', 0)} | {matrix.get('FPF', 0)} "
-            f"| {matrix.get('FFP', 0)} | {matrix.get('FFF', 0)} |"
+            f"| {matrix.get('PP', 0)} | {matrix.get('PF', 0)} "
+            f"| {matrix.get('FP', 0)} | {matrix.get('FF', 0)} |"
         )
     lines.extend([
         "",
@@ -505,7 +509,7 @@ def write_report_exclusive(report: dict[str, Any], prefix: str) -> tuple[Path, P
         "|---|---:|---|---|---:|---:|---:|---:|---:|",
     ])
     for result in report["results"]:
-        for group in ("A", "B", "C"):
+        for group in ("P", "C"):
             cache = result["provider_cache"][group]
             hit_rate = cache["provider_prefix_hit_rate"]
             cached_ratio = cache["provider_cached_input_ratio"]
@@ -525,7 +529,7 @@ def write_report_exclusive(report: dict[str, Any], prefix: str) -> tuple[Path, P
         "|---|---:|---|---:|---|",
     ])
     for result in report["results"]:
-        for group in ("A", "B", "C"):
+        for group in ("P", "C"):
             cache = result["summary_cache"][group]
             lines.append(
                 f"| {result['phase']} | {result['repeat_index']} | {group} "
@@ -557,7 +561,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--smoke-items", type=int, default=1)
     parser.add_argument("--skip-smoke", action="store_true")
     parser.add_argument("--formal-items", type=int)
-    parser.add_argument("--no-compression-threshold", type=int, default=1_000_000)
     parser.add_argument("--compression-threshold", type=int, default=10_000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--required-url", action="append", default=[])
@@ -572,7 +575,6 @@ def parse_args() -> argparse.Namespace:
     for name in (
         "repeat",
         "smoke_items",
-        "no_compression_threshold",
         "compression_threshold",
     ):
         if getattr(args, name) <= 0:
@@ -590,10 +592,7 @@ def main() -> None:
     load_dotenv()
     load_dotenv(REPO_ROOT / ".env")
     args = parse_args()
-    groups = comparison_groups(
-        args.no_compression_threshold,
-        args.compression_threshold,
-    )
+    groups = comparison_groups(args.compression_threshold)
     phases = []
     if not args.skip_smoke:
         phases.append(("smoke", 1, args.smoke_items))
@@ -625,15 +624,12 @@ def main() -> None:
     )
 
     report = {
-        "comparison_schema_version": 1,
+        "comparison_schema_version": 2,
         "run_prefix": args.run_prefix,
         "dataset_name": args.dataset,
         "dataset_item_ids": dataset_item_ids,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "thresholds": {
-            "managed_no_compression": args.no_compression_threshold,
-            "managed_compression": args.compression_threshold,
-        },
+        "thresholds": {"adaptive_compact": args.compression_threshold},
         "evaluator_name": _primary_evaluator(args.runner_args),
         "results": [],
     }

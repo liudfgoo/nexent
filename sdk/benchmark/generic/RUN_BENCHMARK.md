@@ -58,7 +58,8 @@
 
 ### 上下文管理
 
-Context Manager 配置从 YAML 文件的 `agent_config.enable_context_manager` 字段读取，CLI 参数可覆盖。
+PR #3475 后 ContextManager/ContextItems assembly 始终启用。配置控制的是
+`processing_mode`，而不是选择 Legacy/Managed runtime。
 
 **YAML 配置示例**：
 ```yaml
@@ -70,13 +71,20 @@ agent_config:
 
 | 参数                          | 说明        |
 | --------------------------- | --------- |
-| `--enable-context-manager`  | 强制启用上下文管理（覆盖 YAML） |
-| `--disable-context-manager` | 强制禁用上下文管理（覆盖 YAML） |
+| `--context-processing-mode passthrough` | 同一 ContextItems assembly，不执行 adaptive compaction |
+| `--context-processing-mode adaptive_compact` | 启用 adaptive compaction |
+| `--enable-context-manager` | 兼容别名，映射为 `adaptive_compact` |
+| `--disable-context-manager` | 兼容别名，映射为 `passthrough` |
+| `--token-threshold` | 压缩阈值 |
+| `--soft-input-budget` | 显式 soft input budget |
+| `--hard-input-budget` | 显式 hard input budget |
+| `--context-window-tokens` | 模型 context-window 容量 |
 
 **逻辑流程**：
-1. 从 YAML 读取 `enable_context_manager` 值（默认 `false`）
-2. CLI 参数 `--enable-context-manager` 或 `--disable-context-manager` 可覆盖
-3. 创建 `ContextManagerConfig(enabled=enable_cm)`，`enabled` 参数直接来自配置
+1. 从 YAML 读取旧 `enable_context_manager`，映射为 policy；
+2. `--context-processing-mode` 优先覆盖 YAML；
+3. 创建带 `PolicyLayers` 的 `ContextManagerConfig`；
+4. P/C 始终使用 `context_runtime=context_items`。
 
 ### 执行控制
 
@@ -195,21 +203,22 @@ python run_benchmark.py \
   --run-name gsm8k-custom-system-prompt
 ```
 
-### 场景 8：启用上下文管理
+### 场景 8：选择上下文处理策略
 
 ```bash
-# 强制启用（即使 YAML 中未启用）
+# 自适应压缩
 python run_benchmark.py \
   --agent-config configs/agent_7.yaml \
   --dataset gsm8k-n10 \
-  --enable-context-manager \
+  --context-processing-mode adaptive_compact \
+  --token-threshold 10000 \
   --evaluators numeric_answer
 
-# 强制禁用（即使 YAML 中已启用）
+# 同一 ContextItems assembly，不压缩
 python run_benchmark.py \
   --agent-config configs/agent_7.yaml \
   --dataset gsm8k-n10 \
-  --disable-context-manager \
+  --context-processing-mode passthrough \
   --evaluators numeric_answer
 ```
 
@@ -220,7 +229,7 @@ python run_benchmark.py \
 ```
 --duty-prompt "..."           → 覆盖 YAML 中的 duty_prompt
 --max-steps 20                → 覆盖 YAML 中的 max_steps
---enable-context-manager      → 覆盖 YAML 中的 enable_context_manager
+--context-processing-mode adaptive_compact → 覆盖 YAML policy
 --temperature 0.5             → 覆盖默认值 0.1
 ```
 
@@ -247,24 +256,24 @@ python run_benchmark.py \
 # http://localhost:3100 → Datasets → gsm8k-n10 → Runs
 ```
 
-## ContextManager A/B/C 标准对照
+## Context processing P/C 标准对照
 
-使用 `run_context_manager_comparison.py` 一次执行三组配对实验：
+使用 `run_context_manager_comparison.py` 一次执行两组同代码配对实验：
 
 完整参数和运行规范见
 [`RUN_CONTEXT_MANAGER_COMPARISON.md`](./RUN_CONTEXT_MANAGER_COMPARISON.md)。
 
-- A：Legacy；
-- B：Managed，阈值默认 `1000000`，用于隔离 runtime/assembly；
-- C：Managed，阈值默认 `10000`，用于测量正常 compression 效果。
+- P：`context_items + passthrough`；
+- C：`context_items + adaptive_compact`。
 
 默认先对每组运行一个 item 的 smoke test，再执行正式实验：
 
 ```bash
 python sdk/benchmark/generic/run_context_manager_comparison.py \
   --dataset gaia-level1-web-search \
-  --run-prefix gaia-cm-20260720 \
+  --run-prefix gaia-context-20260723 \
   --repeat 3 \
+  --compression-threshold 10000 \
   --required-url data-process=http://localhost:5010/health \
   --runner-args \
     --agent-config path/to/gaia-agent.yaml \
@@ -275,8 +284,8 @@ python sdk/benchmark/generic/run_context_manager_comparison.py \
 
 关键行为：
 
-- 三组共享 dataset、item 顺序、模型、tools、prompts 和 evaluator；
-- 每轮随机交错 A/B/C 执行顺序，并记录实际顺序；
+- 两组共享 dataset、item 顺序、模型、tools、prompts、budget 和 evaluator；
+- 每轮随机交错 P/C 执行顺序，并记录实际顺序；
 - system prompt 模板使用相同实验时间；
 - run name 自动包含 phase、repeat 和组别；
 - 本地或 Langfuse 已存在同名 run 时拒绝启动；
@@ -287,10 +296,11 @@ python sdk/benchmark/generic/run_context_manager_comparison.py \
 报告中的比较口径：
 
 ```text
-A vs B：Managed/Legacy runtime 与上下文组装差异
-B vs C：真实 LLM 摘要压缩影响
-A vs C：ContextManager 整体产品效果
+P vs C：同一 ContextItems runtime 下 adaptive compaction 的增量效果
 ```
+
+历史 L 基线固定为 `32152c3bf7d43c37ff36336080d120284a42046d`，只在独立
+worktree 中运行。L/P 比较是架构迁移效果，不能和 P/C 的策略归因混为一谈。
 
 外部工具依赖通过重复传入 `--required-url NAME=URL` 纳入启动前检查。健康检查返回
 5xx 或无法连接时，任何 Agent/LLM 调用开始前即终止。

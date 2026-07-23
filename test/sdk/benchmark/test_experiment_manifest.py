@@ -14,9 +14,15 @@ from sdk.benchmark.generic.experiment_manifest import (
 
 @dataclass
 class _ContextConfig:
-    enabled: bool = True
     token_threshold: int = 10_000
     keep_recent_steps: int = 4
+    policy_layers: dict = None
+
+    def __post_init__(self):
+        if self.policy_layers is None:
+            self.policy_layers = {
+                "platform": {"processing_mode": "adaptive_compact"}
+            }
 
 
 def test_build_manifest_records_resolved_values(monkeypatch, tmp_path):
@@ -47,7 +53,11 @@ def test_build_manifest_records_resolved_values(monkeypatch, tmp_path):
     )
 
     assert manifest["code_commit"] == "abc123"
-    assert manifest["context_runtime"] == "managed"
+    assert manifest["manifest_schema_version"] == 2
+    assert manifest["context_runtime"] == "context_items"
+    assert manifest["context_processing_mode"] == "adaptive_compact"
+    assert manifest["adaptive_compaction_enabled"] is True
+    assert manifest["context_policy_fingerprint"]
     assert manifest["context_manager"]["token_threshold"] == 10_000
     assert manifest["dataset_item_ids"] == ["item-1", "item-2"]
     assert manifest["tool_schema_hash"] == sha256_value([{"name": "search"}])

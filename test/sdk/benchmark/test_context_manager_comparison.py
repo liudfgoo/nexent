@@ -16,17 +16,16 @@ from sdk.benchmark.generic.run_context_manager_comparison import (
 )
 
 
-def test_comparison_groups_isolate_runtime_and_compression_threshold():
-    groups = comparison_groups(1_000_000, 10_000)
+def test_comparison_groups_isolate_processing_policy():
+    groups = comparison_groups(10_000)
 
-    assert [group.key for group in groups] == ["A", "B", "C"]
-    assert groups[0].runner_args == ("--disable-context-manager",)
-    assert groups[1].runner_args[-1] == "1000000"
-    assert groups[2].runner_args[-1] == "10000"
+    assert [group.key for group in groups] == ["P", "C"]
+    assert groups[0].runner_args == ("--context-processing-mode", "passthrough")
+    assert groups[1].runner_args[-1] == "10000"
 
 
 def test_runner_command_contains_owned_group_configuration():
-    group = GroupSpec("B", "managed-no-compression", ("--enable-context-manager",))
+    group = GroupSpec("P", "passthrough", ("--context-processing-mode", "passthrough"))
 
     command = build_runner_command(
         python_executable="python",
@@ -59,8 +58,7 @@ def test_paired_outcomes_requires_identical_item_ids():
     with pytest.raises(ValueError, match="dataset item IDs do not match"):
         paired_outcomes(
             {
-                "A": {"one": True, "two": True, "missing": False},
-                "B": {"one": True, "two": False},
+                "P": {"one": True, "two": True, "missing": False},
                 "C": {"one": False, "two": False},
             }
         )
@@ -69,14 +67,13 @@ def test_paired_outcomes_requires_identical_item_ids():
 def test_paired_outcomes_builds_matrix_for_identical_item_ids():
     result = paired_outcomes(
         {
-            "A": {"one": True, "two": True},
-            "B": {"one": True, "two": False},
+            "P": {"one": True, "two": True},
             "C": {"one": False, "two": False},
         }
     )
 
     assert result["paired_item_count"] == 2
-    assert result["outcome_matrix"] == {"PPF": 1, "PFF": 1}
+    assert result["outcome_matrix"] == {"PF": 2}
 
 
 def test_fetch_run_results_waits_for_complete_dataset_run(monkeypatch):
@@ -127,11 +124,11 @@ def test_fetch_complete_dataset_run_reports_persistent_missing_items(monkeypatch
 
 
 def test_build_run_name_is_paired_and_explicit():
-    group = comparison_groups(1_000_000, 10_000)[2]
+    group = comparison_groups(10_000)[1]
 
     assert (
         build_run_name("gaia-cm", "formal", 3, group)
-        == "gaia-cm-formal-r03-c-managed-compression"
+        == "gaia-cm-formal-r03-c-adaptive-compact"
     )
 
 

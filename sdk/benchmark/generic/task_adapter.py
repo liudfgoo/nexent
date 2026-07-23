@@ -179,14 +179,24 @@ def make_nexent_task(
                     agent.name
                     for agent in (agent_run_info.agent_config.managed_agents or [])
                 ],
-                "context_manager_enabled": (
-                    context_manager_config is not None
-                    and getattr(context_manager_config, "enabled", False)
+                "context_processing_mode": (
+                    agent_run_info.agent_config.context_manager_config.policy_layers.platform[
+                        "processing_mode"
+                    ]
+                    if isinstance(
+                        agent_run_info.agent_config.context_manager_config.policy_layers.platform,
+                        dict,
+                    )
+                    else getattr(
+                        agent_run_info.agent_config.context_manager_config.policy_layers.platform,
+                        "processing_mode",
+                        "passthrough",
+                    )
                 ),
                 "user_id": user_id,
-                "context_component_types": [
-                    str(getattr(component, "component_type", "unknown"))
-                    for component in (agent_run_info.agent_config.context_components or [])
+                "context_item_types": [
+                    str(getattr(item, "type", "unknown"))
+                    for item in (agent_run_info.agent_config.context_items or [])
                 ],
             },
             "compression": {
