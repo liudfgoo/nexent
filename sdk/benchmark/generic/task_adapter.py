@@ -144,10 +144,11 @@ def make_nexent_task(
         finally:
             loop.close()
 
-        system_prompt_text = (
-            agent_run_info.agent_config.prompt_templates.get("system_prompt", "")
-            if agent_run_info.agent_config.prompt_templates
-            else ""
+        context_items = agent_run_info.agent_config.context_items or []
+        system_prompt_text = "\n\n".join(
+            str((item.content or {}).get("text", ""))
+            for item in context_items
+            if str(getattr(item.type, "value", item.type)) == "system_prompt"
         )
         model_config = agent_run_info.model_config_list[0] if agent_run_info.model_config_list else None
 
@@ -196,7 +197,17 @@ def make_nexent_task(
                 "user_id": user_id,
                 "context_item_types": [
                     str(getattr(item, "type", "unknown"))
-                    for item in (agent_run_info.agent_config.context_items or [])
+                    for item in context_items
+                ],
+                "context_items": [
+                    {
+                        "id": item.id,
+                        "type": str(getattr(item.type, "value", item.type)),
+                        "content": item.content,
+                        "priority": item.priority,
+                        "required": item.required,
+                    }
+                    for item in context_items
                 ],
             },
             "compression": {

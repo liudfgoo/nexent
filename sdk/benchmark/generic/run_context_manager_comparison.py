@@ -408,7 +408,10 @@ def paired_outcomes(group_results: dict[str, dict[str, bool]]) -> dict[str, Any]
 
 def validate_manifest_parity(run_names: dict[str, str]) -> dict[str, Any]:
     """Ensure all non-policy resolved settings are identical across P/C."""
-    from experiment_manifest import manifest_path
+    try:
+        from .experiment_manifest import manifest_path
+    except ImportError:
+        from experiment_manifest import manifest_path
 
     manifest_dir = ARTIFACT_ROOT / "manifests"
     manifests = {

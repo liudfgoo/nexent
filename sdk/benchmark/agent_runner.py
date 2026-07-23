@@ -35,6 +35,7 @@ from nexent.core.agents.agent_model import (  # noqa: E402
     AgentHistory,
     AgentRunInfo,
     ModelConfig,
+    ToolConfig,
 )
 from nexent.core.agents.context import ContextItemInput  # noqa: E402
 from nexent.core.agents.run_agent import agent_run  # noqa: E402
@@ -300,6 +301,129 @@ def build_agent_run_info_with_custom_prompt(
     )
 
 
+_METADATA_UNSUPPORTED_TOOLS = {
+    "KnowledgeBaseSearchTool",
+    "DifySearchTool",
+    "DataMateSearchTool",
+    "HaotianSearchTool",
+    "StoreMemoryTool",
+    "SearchMemoryTool",
+}
+_ANALYZE_TOOL_CLASSES = {
+    "AnalyzeTextFileTool",
+    "AnalyzeImageTool",
+    "AnalyzeAudioTool",
+    "AnalyzeVideoTool",
+}
+
+
+def _build_storage_client():
+    endpoint = os.getenv("MINIO_ENDPOINT")
+    access_key = os.getenv("MINIO_ACCESS_KEY")
+    secret_key = os.getenv("MINIO_SECRET_KEY")
+    if not all([endpoint, access_key, secret_key]):
+        return None
+    from nexent.storage.minio import MinIOStorageClient
+    return MinIOStorageClient(
+        endpoint=endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        region=os.getenv("MINIO_REGION"),
+        default_bucket=os.getenv("MINIO_DEFAULT_BUCKET"),
+        secure=os.getenv("MINIO_SECURE", "true").lower() == "true",
+    )
+
+
+def _build_vlm_model():
+    api_url = os.getenv("VLM_API_URL") or os.getenv("LLM_API_URL")
+    api_key = os.getenv("VLM_API_KEY") or os.getenv("LLM_API_KEY")
+    model_name = os.getenv("VLM_MODEL_NAME") or os.getenv("LLM_MODEL_NAME")
+    if not all([api_url, api_key, model_name]):
+        return None
+    from nexent.core.models.openai_vlm import OpenAIVLModel
+    return OpenAIVLModel(
+        observer=MessageObserver(),
+        model_id=model_name,
+        api_base=api_url,
+        api_key=api_key,
+        temperature=0.7,
+        ssl_verify=False,
+    )
+
+
+def _build_llm_model():
+    api_url = os.getenv("LLM_API_URL")
+    api_key = os.getenv("LLM_API_KEY")
+    model_name = os.getenv("LLM_MODEL_NAME")
+    if not all([api_url, api_key, model_name]):
+        return None
+    from nexent.core.models.openai_long_context_model import OpenAILongContextModel
+    max_tokens = os.getenv("LLM_MAX_TOKENS")
+    return OpenAILongContextModel(
+        observer=MessageObserver(),
+        model_id=model_name,
+        api_base=api_url,
+        api_key=api_key,
+        max_context_tokens=int(max_tokens) if max_tokens else 128000,
+        ssl_verify=False,
+    )
+
+
+def _build_analyze_tool_metadata(class_name: str) -> dict:
+    metadata = {}
+    storage_client = _build_storage_client()
+    if storage_client:
+        metadata["storage_client"] = storage_client
+    if class_name == "AnalyzeTextFileTool":
+        llm_model = _build_llm_model()
+        if llm_model:
+            metadata["llm_model"] = llm_model
+        data_process_url = os.getenv("DATA_PROCESS_SERVICE")
+        if data_process_url:
+            metadata["data_process_service_url"] = data_process_url
+    else:
+        vlm_model = _build_vlm_model()
+        if vlm_model:
+            metadata["vlm_model"] = vlm_model
+    return metadata
+
+
+def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
+    """Reconstruct standalone benchmark ToolConfig objects from exported YAML."""
+    tool_configs = []
+    skipped = []
+    for entry in tools_yaml or []:
+        if not entry.get("enabled", True):
+            continue
+        class_name = entry.get("tool_class", "")
+        tool_name = entry.get("tool_name", "")
+        if class_name in _METADATA_UNSUPPORTED_TOOLS:
+            skipped.append(f"{tool_name} ({class_name})")
+            continue
+        metadata = (
+            _build_analyze_tool_metadata(class_name)
+            if class_name in _ANALYZE_TOOL_CLASSES
+            else None
+        )
+        tool_configs.append(ToolConfig(
+            class_name=class_name,
+            name=tool_name,
+            description=entry.get("tool_description", ""),
+            inputs=entry.get("tool_inputs"),
+            output_type=entry.get("tool_output_type"),
+            params=entry.get("tool_params", {}),
+            source=entry.get("tool_source", "local"),
+            usage=entry.get("tool_usage"),
+            metadata=metadata,
+        ))
+    if skipped:
+        print(
+            f"  WARNING: Skipped {len(skipped)} tools requiring external services: "
+            f"{', '.join(skipped)}"
+        )
+    return tool_configs
+
+
 # ============ Message Processing Functions ============
 
 def process_agent_message(chunk: str) -> tuple[str, str]:
@@ -328,7 +452,23 @@ class AgentRunResult:
         self.step_count: int = 0
         self.errors: list = []
         self.total_input_tokens: int = 0
+        self.total_api_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        self.steps: list = []
+        self.compression_calls: int = 0
+        self.compression_input_tokens: int = 0
+        self.compression_output_tokens: int = 0
+        self.compression_cache_hits: int = 0
+        self.compression_cache_types: list = []
+        self.summary_cache_hits: int = 0
+        self.summary_cache_types: list = []
+        self.total_uncompressed_est_tokens: int = 0
+        self.provider_cache_available_calls: int = 0
+        self.provider_cache_hit_calls: int = 0
+        self.provider_cached_input_tokens: int = 0
+        self.provider_uncached_input_tokens: int = 0
+        self.provider_cache_statuses: set[str] = set()
+        self.provider_cache_metrics_sources: set[str] = set()
 
     def __repr__(self):
         return f"AgentRunResult(final_answer_len={len(self.final_answer)}, " \
@@ -374,7 +514,7 @@ async def run_agent_with_tracking(
         if msg_type in TRACKED_MESSAGE_TYPES:
             result.message_type_count[msg_type] = result.message_type_count.get(msg_type, 0) + 1
 
-            if msg_type in ["step_count", "final_answer"]:
+            if msg_type == "step_count":
                 result.step_count += 1
 
         # Handle final answer
@@ -394,8 +534,42 @@ async def run_agent_with_tracking(
         elif msg_type == "token_count":
             try:
                 token_data = json.loads(msg_content)
-                result.total_input_tokens += token_data.get("step_input_tokens", 0) or 0
+                api_input = token_data.get("step_input_tokens", 0) or 0
+                result.total_input_tokens += (
+                    token_data.get("estimated_context_tokens") or api_input
+                )
+                result.total_api_input_tokens += api_input
                 result.total_output_tokens += token_data.get("step_output_tokens", 0) or 0
+                result.compression_calls += token_data.get("compression_calls", 0) or 0
+                result.compression_input_tokens += token_data.get("compression_input_tokens", 0) or 0
+                result.compression_output_tokens += token_data.get("compression_output_tokens", 0) or 0
+                result.compression_cache_hits += token_data.get("compression_cache_hits", 0) or 0
+                result.total_uncompressed_est_tokens += token_data.get("uncompressed_est_tokens", 0) or 0
+                cache_types = token_data.get("compression_cache_types", []) or []
+                for cache_type in cache_types:
+                    if cache_type not in result.compression_cache_types:
+                        result.compression_cache_types.append(cache_type)
+                    if cache_type in {"previous_cache_hit", "current_cache_hit"}:
+                        result.summary_cache_hits += 1
+                        if cache_type not in result.summary_cache_types:
+                            result.summary_cache_types.append(cache_type)
+                provider_status = token_data.get("provider_cache_status")
+                if provider_status:
+                    result.provider_cache_statuses.add(provider_status)
+                    result.provider_cache_metrics_sources.add(
+                        token_data.get("provider_cache_metrics_source", "capability_unknown")
+                    )
+                    if provider_status == "available":
+                        result.provider_cache_available_calls += 1
+                        result.provider_cache_hit_calls += int(
+                            bool(token_data.get("provider_cache_hit", False))
+                        )
+                        result.provider_cached_input_tokens += (
+                            token_data.get("provider_cached_input_tokens", 0) or 0
+                        )
+                        result.provider_uncached_input_tokens += (
+                            token_data.get("provider_uncached_input_tokens", 0) or 0
+                        )
             except (json.JSONDecodeError, TypeError):
                 pass
 
