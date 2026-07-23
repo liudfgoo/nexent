@@ -16,6 +16,7 @@ async def test_run_agent_with_tracking_builds_model_step_and_metrics(monkeypatch
             ("model_output_code", "print('x')"),
             ("parse", "python_interpreter"),
             ("execution_logs", "x"),
+            ("error", "tool failed"),
             (
                 "token_count",
                 json.dumps({
@@ -52,7 +53,8 @@ async def test_run_agent_with_tracking_builds_model_step_and_metrics(monkeypatch
     assert result.steps[0]["main_output"] == "answer draft"
     assert result.steps[0]["code"] == "print('x')"
     assert result.steps[0]["tool_call"] == "python_interpreter"
-    assert result.steps[0]["observation"] == "x"
+    assert result.steps[0]["observation"] == "x\nError:\ntool failed"
+    assert result.errors == ["tool failed"]
     assert result.steps[0]["token_usage"]["output_tokens"] == 20
     assert result.steps[0]["compression"]["calls"] == 1
     assert result.steps[1]["step_number"] == "final_answer"

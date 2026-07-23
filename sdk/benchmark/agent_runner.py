@@ -562,6 +562,9 @@ async def run_agent_with_tracking(
         # Handle error
         elif msg_type == "error":
             result.errors.append(msg_content)
+            if current_step is not None:
+                separator = "\n" if current_step["observation"] else ""
+                current_step["observation"] += f"{separator}Error:\n{msg_content}"
             if on_error:
                 on_error(msg_content)
 
