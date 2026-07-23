@@ -516,7 +516,7 @@ async def run_agent_with_tracking(
             if msg_type == "step_count":
                 result.step_count += 1
                 current_step = {
-                    "step_number": msg_content,
+                    "step_number": result.step_count,
                     "query": initial_query if result.step_count == 1 else "",
                     "thinking": "",
                     "deep_thinking": "",
