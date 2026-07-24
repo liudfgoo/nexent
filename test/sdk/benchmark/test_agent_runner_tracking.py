@@ -6,6 +6,20 @@ import pytest
 from sdk.benchmark import agent_runner
 
 
+def test_resolve_app_description_uses_language_specific_production_defaults(monkeypatch):
+    monkeypatch.setattr(agent_runner, "APP_DESCRIPTION", None)
+
+    assert agent_runner.resolve_app_description("zh") == "Nexent 是一个开源智能体SDK和平台"
+    assert agent_runner.resolve_app_description("en") == "Nexent is an open-source agent SDK and platform"
+
+
+def test_resolve_app_description_preserves_explicit_override(monkeypatch):
+    monkeypatch.setattr(agent_runner, "APP_DESCRIPTION", "Tenant-specific description")
+
+    assert agent_runner.resolve_app_description("zh") == "Tenant-specific description"
+    assert agent_runner.resolve_app_description("en") == "Tenant-specific description"
+
+
 @pytest.mark.asyncio
 async def test_run_agent_with_tracking_builds_model_step_and_metrics(monkeypatch):
     async def fake_agent_run(_):
@@ -188,3 +202,28 @@ async def test_hard_budget_error_updates_budget_evidence(monkeypatch):
     assert result.over_hard_budget is True
     assert result.hard_budget_tokens == 11000
     assert result.peak_context_tokens == 13302
+def test_builtin_skill_tools_are_passively_injected_with_runtime_scope():
+    configured = SimpleNamespace(name="search")
+
+    tools = agent_runner.inject_production_managed_tools(
+        [configured],
+        agent_id=8,
+        tenant_id="tenant-a",
+        version_no=2,
+        local_skills_dir="/skills",
+    )
+
+    assert [tool.name for tool in tools] == [
+        "search",
+        "parallel_executor",
+        "run_skill_script",
+        "read_skill_md",
+        "read_skill_config",
+        "write_skill_file",
+    ]
+    injected = tools[2]
+    assert injected.source == "builtin"
+    assert injected.metadata["agent_id"] == 8
+    assert injected.metadata["tenant_id"] == "tenant-a"
+    assert injected.metadata["version_no"] == 2
+    assert injected.params["local_skills_dir"] == "/skills"

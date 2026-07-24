@@ -82,6 +82,14 @@ def load_agent_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def load_parity_snapshot(snapshot_path: str) -> dict:
+    """Load a production parity snapshot from JSON or YAML."""
+    with open(snapshot_path, "r", encoding="utf-8") as handle:
+        if snapshot_path.endswith(".json"):
+            return json.load(handle)
+        return yaml.safe_load(handle)
+
+
 def upload_jsonl(dataset_name: str, jsonl_path: str,
                  input_key: str = "question", output_key: str = "answer") -> int:
     """Upload a JSONL file as a Langfuse dataset."""
@@ -200,6 +208,7 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
             "model_config",
             "provider_cache",
             "system_prompt",
+            "parity_snapshot",
         }
         missing_output_fields = sorted(required_output_fields - output.keys())
         if missing_output_fields:
@@ -213,6 +222,32 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
             from experiment_manifest import build_manifest, write_manifest_exclusive
 
             agent_config = output.get("agent_config", {})
+            expected_snapshot = manifest_context.get("expected_parity_snapshot")
+            parity_gate = {
+                "passed": None,
+                "simulation_fidelity": "mechanism_only",
+            }
+            if expected_snapshot is not None:
+                from parity_snapshot import diff_parity_snapshots
+                parity_diff = diff_parity_snapshots(
+                    expected_snapshot,
+                    output.get("parity_snapshot", {}),
+                )
+                if not parity_diff["passed"]:
+                    raise RuntimeError(
+                        "Production parity gate failed: "
+                        + json.dumps(parity_diff, ensure_ascii=False, sort_keys=True)
+                    )
+                parity_gate = {
+                    "passed": True,
+                    "simulation_fidelity": "production_snapshot",
+                    "diff": parity_diff,
+                }
+            build_context = {
+                key: value
+                for key, value in manifest_context.items()
+                if key != "expected_parity_snapshot"
+            }
             manifest = build_manifest(
                 dataset_name=dataset_name,
                 dataset_version=dataset_version,
@@ -221,7 +256,9 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                 system_prompt=output.get("system_prompt", ""),
                 model_config=output.get("model_config", {}),
                 agent_config=agent_config,
-                **manifest_context,
+                parity_snapshot=output.get("parity_snapshot", {}),
+                parity_gate=parity_gate,
+                **build_context,
             )
             manifest_path = write_manifest_exclusive(
                 manifest,
@@ -529,6 +566,19 @@ def main():
                         help="Custom few shots prompt (overrides YAML)")
     parser.add_argument("--system-prompt-file", type=str,
                         help="Path to custom system prompt file (bypasses template)")
+    parser.add_argument(
+        "--production-parity-snapshot",
+        type=str,
+        help="JSON/YAML snapshot used as a strict prompt/context/tool parity gate",
+    )
+    parser.add_argument(
+        "--tenant-id",
+        help="Tenant identity used by passively injected builtin skill tools",
+    )
+    parser.add_argument(
+        "--skills-path",
+        help="Local skill root passed to production-equivalent builtin skill tools",
+    )
     parser.add_argument("--experiment-time", type=str,
                         help=argparse.SUPPRESS)
     
@@ -549,6 +599,16 @@ def main():
                         help="Explicit soft input budget in tokens")
     parser.add_argument("--hard-input-budget", type=positive_int,
                         help="Explicit hard input budget in tokens")
+    parser.add_argument(
+        "--budget-profile",
+        choices=(
+            "legacy_threshold",
+            "production_like",
+            "synthetic_trigger",
+            "synthetic_stress",
+        ),
+        help="Budget provenance/classification recorded in the run manifest",
+    )
     parser.add_argument("--context-window-tokens", type=positive_int,
                         help="Model context-window capacity recorded by ContextManager")
     parser.add_argument("--keep-recent-steps", type=non_negative_int,
@@ -609,6 +669,11 @@ def main():
     temperature = args.temperature if args.temperature is not None else agent_cfg.get("temperature", 0.1)
     language = args.language or "en"
     model_factory = args.model_factory or agent_cfg.get("model_factory")
+    budget_profile = args.budget_profile or (
+        "explicit_unclassified"
+        if args.soft_input_budget is not None or args.hard_input_budget is not None
+        else "legacy_threshold"
+    )
     
     yaml_enable_cm = agent_cfg.get("enable_context_manager", False)
     processing_mode = (
@@ -692,9 +757,19 @@ def main():
         )
         return
 
-    from agent_runner import build_tools_from_yaml
+    from agent_runner import build_tools_from_yaml, inject_production_managed_tools
     tools_yaml = agent_config.get("tools", [])
     tools = build_tools_from_yaml(tools_yaml) if tools_yaml else []
+    agent_info = agent_config.get("agent_info", {})
+    tenant_id = args.tenant_id or agent_info.get("tenant_id") or "tenant_id"
+    skills_path = args.skills_path or os.getenv("SKILLS_PATH")
+    tools = inject_production_managed_tools(
+        tools,
+        agent_id=int(agent_info.get("agent_id", 0) or 0),
+        tenant_id=str(tenant_id),
+        version_no=int(agent_cfg.get("version_no", 0) or 0),
+        local_skills_dir=skills_path,
+    )
 
     # Run new experiment
     from task_adapter import make_nexent_task
@@ -731,6 +806,23 @@ def main():
         tools=tools,
         model_factory=model_factory,
         user_id="user_id",
+        prompt_template_version=str(agent_cfg.get("prompt_template_id", "")),
+        prompt_template_source=(
+            str(Path(args.agent_config).resolve()) if args.agent_config else "benchmark_cli"
+        ),
+        resource_support={
+            "tools": True,
+            "skills": True,
+            "managed_agents": True,
+            "external_agents": False,
+            "memory": False,
+            "knowledge_base": False,
+        },
+        intentional_empty_resources={
+            "skills": not bool(agent_config.get("skills")),
+            "managed_agents": not bool(agent_config.get("sub_agents")),
+        },
+        prompt_components=agent_config.get("prompt_components"),
     )
 
     run_name = args.run_name or f"{args.dataset}-{int(time.time())}"
@@ -741,6 +833,7 @@ def main():
     print(f"  Language:     {language}")
     print(f"  Model factory:{model_factory or 'unknown'}")
     print(f"  Context mode: {processing_mode}")
+    print(f"  Budget profile: {budget_profile}")
     print(f"  CM config:    threshold={cm_config.token_threshold}, "
           f"soft_budget={cm_config.soft_input_budget_tokens or cm_config.token_threshold}, "
           f"hard_budget={cm_config.hard_input_budget_tokens or int(cm_config.token_threshold * 1.1)}, "
@@ -771,6 +864,11 @@ def main():
                 "algorithm": "item_representation",
             },
             "started_at": datetime.now(timezone.utc).isoformat(),
+            "budget_profile": budget_profile,
+            "expected_parity_snapshot": (
+                load_parity_snapshot(args.production_parity_snapshot)
+                if args.production_parity_snapshot else None
+            ),
         },
     )
 

@@ -60,7 +60,9 @@ THINKING_OFF_EXTRA_BODY = {
 }
 
 APP_NAME = os.getenv("APP_NAME", "Nexent")
-APP_DESCRIPTION = os.getenv("APP_DESCRIPTION", "Nexent is an open-source agent SDK and platform")
+APP_DESCRIPTION = os.getenv("APP_DESCRIPTION")
+DEFAULT_APP_DESCRIPTION_ZH = "Nexent 是一个开源智能体SDK和平台"
+DEFAULT_APP_DESCRIPTION_EN = "Nexent is an open-source agent SDK and platform"
 
 # ============ Default Prompt Templates ============
 DEFAULT_DUTY_PROMPT = """You are an intelligent assistant focused on helping users solve problems. You need to:
@@ -97,6 +99,13 @@ def build_prompt_templates(
     return prompt_templates
 
 
+def resolve_app_description(language: str) -> str:
+    """Resolve the app description using the same language fallback as production."""
+    if APP_DESCRIPTION:
+        return APP_DESCRIPTION
+    return DEFAULT_APP_DESCRIPTION_ZH if language == "zh" else DEFAULT_APP_DESCRIPTION_EN
+
+
 # ============ AgentRunInfo Construction Functions ============
 
 def build_agent_run_info(
@@ -120,6 +129,7 @@ def build_agent_run_info(
     max_tokens: Optional[int] = None,
     current_time: Optional[str] = None,
     model_factory: Optional[str] = None,
+    prompt_components: Optional[dict] = None,
 ) -> AgentRunInfo:
     """
     Construct AgentRunInfo with ContextManager-based stable context.
@@ -176,7 +186,7 @@ def build_agent_run_info(
         constraint=constraint,
         few_shots=few_shots,
         app_name=APP_NAME,
-        app_description=APP_DESCRIPTION,
+        app_description=resolve_app_description(language),
         user_id=user_id,
         language=language,
         is_manager=is_manager,
@@ -187,12 +197,46 @@ def build_agent_run_info(
         memory_list=[],
         knowledge_base_summary="",
     )
+    if prompt_components:
+        component_item_ids = {
+            "basic_information": "system:header",
+            "duty_prompt": "system:duty",
+            "constraint_prompt": "system:constraint",
+            "execution_prompt": "system:execution_flow",
+            "resource_prompt": "system:available_resources_header",
+            "code_rules_prompt": "system:code_norms",
+        }
+        by_item_id = {
+            item_id: component_name
+            for component_name, item_id in component_item_ids.items()
+        }
+        context_items = [
+            item.model_copy(update={
+                "content": {
+                    "text": (
+                        prompt_components[by_item_id[item.id]].get("content", "")
+                        if isinstance(prompt_components[by_item_id[item.id]], dict)
+                        else str(prompt_components[by_item_id[item.id]])
+                    )
+                }
+            })
+            if item.id in by_item_id and by_item_id[item.id] in prompt_components
+            else item
+            for item in context_items
+        ]
     if fallback_prompt and not any((duty_prompt, constraint_prompt, few_shots_prompt)):
         context_items = [ContextItemInput(
             id="system:fallback", type="system_prompt", content={"text": fallback_prompt}, required=True
         )]
 
     prompt_templates = build_prompt_templates(language=language, is_manager=is_manager)
+    if "final_answer_contract" in (prompt_components or {}):
+        final_contract = prompt_components["final_answer_contract"]
+        prompt_templates["final_answer"] = (
+            final_contract.get("content", {})
+            if isinstance(final_contract, dict)
+            else final_contract
+        )
 
     # Set context manager config
     cm_config = context_manager_config or ContextManagerConfig()
@@ -387,8 +431,16 @@ def _build_analyze_tool_metadata(class_name: str) -> dict:
     return metadata
 
 
-def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
-    """Reconstruct standalone benchmark ToolConfig objects from exported YAML."""
+def build_tools_from_yaml(
+    tools_yaml: list,
+    *,
+    include_runtime_metadata: bool = True,
+) -> list[ToolConfig]:
+    """Reconstruct ToolConfig objects from exported YAML.
+
+    Snapshot-only callers disable runtime metadata so exporting schemas never
+    initializes storage or model clients.
+    """
     tool_configs = []
     skipped = []
     for entry in tools_yaml or []:
@@ -401,7 +453,7 @@ def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
             continue
         metadata = (
             _build_analyze_tool_metadata(class_name)
-            if class_name in _ANALYZE_TOOL_CLASSES
+            if include_runtime_metadata and class_name in _ANALYZE_TOOL_CLASSES
             else None
         )
         tool_configs.append(ToolConfig(
@@ -421,6 +473,85 @@ def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
             f"{', '.join(skipped)}"
         )
     return tool_configs
+
+
+def inject_production_managed_tools(
+    tools: list[ToolConfig],
+    *,
+    agent_id: int,
+    tenant_id: str,
+    version_no: int,
+    local_skills_dir: str | None,
+) -> list[ToolConfig]:
+    """Mirror production's passive parallel and builtin skill-tool assembly."""
+    from nexent.core.tools.parallel_executor import ParallelExecutorTool
+
+    existing_names = {tool.name for tool in tools}
+    skill_context = {
+        "agent_id": agent_id,
+        "tenant_id": tenant_id,
+        "version_no": version_no,
+        "_benchmark_assembly_origin": "injected_builtin",
+    }
+    params = {"local_skills_dir": local_skills_dir}
+    definitions = (
+        (
+            "RunSkillScriptTool",
+            "run_skill_script",
+            "Execute a skill script with given parameters. Use this to run "
+            "Python or shell scripts that are part of a skill.",
+            '{"skill_name": "str", "script_path": "str", "params": "dict"}',
+        ),
+        (
+            "ReadSkillMdTool",
+            "read_skill_md",
+            "Read skill execution guide and optional additional files. Always "
+            "reads SKILL.md first, then optionally reads additional files.",
+            '{"skill_name": "str", "additional_files": "list[str]"}',
+        ),
+        (
+            "ReadSkillConfigTool",
+            "read_skill_config",
+            "Read the config.yaml file from a skill directory. Returns JSON "
+            "containing configuration variables needed for skill workflows.",
+            '{"skill_name": "str"}',
+        ),
+        (
+            "WriteSkillFileTool",
+            "write_skill_file",
+            "Write content to a file within a skill directory. Creates parent "
+            "directories if they do not exist.",
+            '{"skill_name": "str", "file_path": "str", "content": "str"}',
+        ),
+    )
+    injected: list[ToolConfig] = []
+    if ParallelExecutorTool.name not in existing_names:
+        injected.append(ToolConfig(
+            class_name=ParallelExecutorTool.__name__,
+            name=ParallelExecutorTool.name,
+            description=ParallelExecutorTool.description,
+            inputs=json.dumps(ParallelExecutorTool.inputs, ensure_ascii=False),
+            output_type=ParallelExecutorTool.output_type,
+            params={},
+            source="local",
+            metadata={"_benchmark_assembly_origin": "injected_system"},
+        ))
+    injected.extend(
+        ToolConfig(
+            class_name=class_name,
+            name=name,
+            description=description,
+            inputs=inputs,
+            output_type="string",
+            params=params,
+            source="builtin",
+            usage="builtin",
+            metadata=skill_context,
+        )
+        for class_name, name, description, inputs in definitions
+        if name not in existing_names
+    )
+    return [*tools, *injected]
 
 
 # ============ Message Processing Functions ============

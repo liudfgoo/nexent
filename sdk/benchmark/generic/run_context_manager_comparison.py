@@ -31,6 +31,7 @@ CONTROLLED_RUNNER_ARGS = {
     "--token-threshold",
     "--soft-input-budget",
     "--hard-input-budget",
+    "--budget-profile",
     "--item-limit",
     "--experiment-time",
 }
@@ -43,18 +44,46 @@ class GroupSpec:
     runner_args: tuple[str, ...]
 
 
-def comparison_groups(compression_threshold: int) -> tuple[GroupSpec, ...]:
+def comparison_groups(
+    compression_threshold: int | None = None,
+    *,
+    soft_input_budget: int | None = None,
+    hard_input_budget: int | None = None,
+    budget_profile: str = "legacy_threshold",
+) -> tuple[GroupSpec, ...]:
     """Return the two standard same-code comparison groups."""
+    if soft_input_budget is not None and hard_input_budget is not None:
+        budget_args = (
+            "--soft-input-budget",
+            str(soft_input_budget),
+            "--hard-input-budget",
+            str(hard_input_budget),
+            "--budget-profile",
+            budget_profile,
+        )
+        compact_args = budget_args
+    else:
+        threshold = compression_threshold or 10_000
+        budget_args = (
+            "--token-threshold",
+            str(threshold),
+            "--budget-profile",
+            "legacy_threshold",
+        )
+        compact_args = budget_args
     return (
-        GroupSpec("P", "passthrough", ("--context-processing-mode", "passthrough")),
+        GroupSpec(
+            "P",
+            "passthrough",
+            ("--context-processing-mode", "passthrough", *budget_args),
+        ),
         GroupSpec(
             "C",
             "adaptive-compact",
             (
                 "--context-processing-mode",
                 "adaptive_compact",
-                "--token-threshold",
-                str(compression_threshold),
+                *compact_args,
             ),
         ),
     )
@@ -490,6 +519,8 @@ def validate_manifest_parity(run_names: dict[str, str]) -> dict[str, Any]:
         "tool_count",
         "tool_schema_hash",
         "system_prompt_hash",
+        "parity_snapshot_hash",
+        "budget_profile",
         "evaluator_names",
         "evaluator_version",
     )
@@ -559,6 +590,10 @@ def write_report_exclusive(report: dict[str, Any], prefix: str) -> tuple[Path, P
         f"# ContextManager comparison: {prefix}",
         "",
         "P vs C measures adaptive compaction on the same ContextItems runtime.",
+        "",
+        f"- Budget profile: `{report['budget_profile']}`",
+        f"- Soft input budget: `{report['thresholds'].get('soft_input_budget')}`",
+        f"- Hard input budget: `{report['thresholds'].get('hard_input_budget')}`",
         "",
         "| Phase | Repeat | Paired | PP | PF | FP | FF |",
         "|---|---:|---:|---:|---:|---:|---:|",
@@ -651,7 +686,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--smoke-items", type=int, default=1)
     parser.add_argument("--skip-smoke", action="store_true")
     parser.add_argument("--formal-items", type=int)
-    parser.add_argument("--compression-threshold", type=int, default=10_000)
+    parser.add_argument(
+        "--compression-threshold",
+        type=int,
+        help="Legacy shorthand that derives hard budget as threshold * 1.1",
+    )
+    parser.add_argument("--soft-input-budget", type=int)
+    parser.add_argument("--hard-input-budget", type=int)
+    parser.add_argument(
+        "--budget-profile",
+        choices=("legacy_threshold", "synthetic_trigger", "synthetic_stress"),
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--required-url", action="append", default=[])
     parser.add_argument("--python", default=sys.executable)
@@ -665,12 +710,42 @@ def parse_args() -> argparse.Namespace:
     for name in (
         "repeat",
         "smoke_items",
-        "compression_threshold",
     ):
         if getattr(args, name) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be greater than 0")
     if args.formal_items is not None and args.formal_items <= 0:
         parser.error("--formal-items must be greater than 0")
+    explicit_budgets = (
+        args.soft_input_budget is not None,
+        args.hard_input_budget is not None,
+    )
+    if any(explicit_budgets) and not all(explicit_budgets):
+        parser.error(
+            "--soft-input-budget and --hard-input-budget must be provided together"
+        )
+    if all(explicit_budgets):
+        if args.compression_threshold is not None:
+            parser.error(
+                "--compression-threshold cannot be combined with explicit soft/hard budgets"
+            )
+        if args.soft_input_budget <= 0 or args.hard_input_budget <= 0:
+            parser.error("soft/hard input budgets must be greater than 0")
+        if args.soft_input_budget >= args.hard_input_budget:
+            parser.error("--soft-input-budget must be less than --hard-input-budget")
+        if args.budget_profile not in {"synthetic_trigger", "synthetic_stress"}:
+            parser.error(
+                "explicit soft/hard budgets require --budget-profile "
+                "synthetic_trigger or synthetic_stress"
+            )
+    else:
+        args.compression_threshold = args.compression_threshold or 10_000
+        args.budget_profile = args.budget_profile or "legacy_threshold"
+        if args.compression_threshold <= 0:
+            parser.error("--compression-threshold must be greater than 0")
+        if args.budget_profile != "legacy_threshold":
+            parser.error(
+                "synthetic budget profiles require explicit soft/hard budgets"
+            )
     try:
         validate_runner_args(args.runner_args)
     except ValueError as error:
@@ -682,7 +757,12 @@ def main() -> None:
     load_dotenv()
     load_dotenv(REPO_ROOT / ".env")
     args = parse_args()
-    groups = comparison_groups(args.compression_threshold)
+    groups = comparison_groups(
+        args.compression_threshold,
+        soft_input_budget=args.soft_input_budget,
+        hard_input_budget=args.hard_input_budget,
+        budget_profile=args.budget_profile,
+    )
     phases = []
     if not args.skip_smoke:
         phases.append(("smoke", 1, args.smoke_items))
@@ -719,7 +799,12 @@ def main() -> None:
         "dataset_name": args.dataset,
         "dataset_item_ids": dataset_item_ids,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "thresholds": {"adaptive_compact": args.compression_threshold},
+        "budget_profile": args.budget_profile,
+        "thresholds": {
+            "compression_threshold": args.compression_threshold,
+            "soft_input_budget": args.soft_input_budget,
+            "hard_input_budget": args.hard_input_budget,
+        },
         "evaluator_name": _primary_evaluator(args.runner_args),
         "results": [],
     }

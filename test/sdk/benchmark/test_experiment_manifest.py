@@ -49,11 +49,12 @@ def test_build_manifest_records_resolved_values(monkeypatch, tmp_path):
         agent_config={"name": "agent"},
         evaluator_names=["exact_match"],
         observation_policy={"effective_limit_chars": 0},
+        budget_profile="synthetic_trigger",
         started_at="2026-07-20T00:00:00+00:00",
     )
 
     assert manifest["code_commit"] == "abc123"
-    assert manifest["manifest_schema_version"] == 2
+    assert manifest["manifest_schema_version"] == 3
     assert manifest["context_runtime"] == "context_items"
     assert manifest["context_processing_mode"] == "adaptive_compact"
     assert manifest["adaptive_compaction_enabled"] is True
@@ -62,6 +63,7 @@ def test_build_manifest_records_resolved_values(monkeypatch, tmp_path):
     assert manifest["dataset_item_ids"] == ["item-1", "item-2"]
     assert manifest["tool_schema_hash"] == sha256_value([{"name": "search"}])
     assert manifest["system_prompt_hash"] == sha256_value("system")
+    assert manifest["budget_profile"] == "synthetic_trigger"
     assert manifest["manifest_hash"]
 
 

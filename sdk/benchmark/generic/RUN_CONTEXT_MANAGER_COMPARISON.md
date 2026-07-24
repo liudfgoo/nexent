@@ -20,39 +20,55 @@ P vs C = adaptive compaction 的增量效果
 
 ## 推荐命令
 
-正式实验应显式设置模型、步数、temperature 和压缩阈值：
+正式实验应显式设置模型、步数、temperature、soft/hard budget 和预算分类。对于本次
+`qwen3.7-max` 配置（context window 1,000,000，输出预留 8,192，生产解析 hard
+为 891,808），GAIA 推荐使用低 soft + 生产容量 hard：既提高 C 组压缩触发率，又避免把
+正常长轨迹误判为 hard-budget failure。
 
 ```bash
 backend/.venv/bin/python \
   sdk/benchmark/generic/run_context_manager_comparison.py \
-  --dataset gaia-level1-web-search \
-  --run-prefix gaia-context-20260723 \
+  --dataset gaia-level1-reasoning \
+  --run-prefix gaia-reasoning-pc-20260724 \
   --repeat 3 \
-  --compression-threshold 10000 \
+  --soft-input-budget 10000 \
+  --hard-input-budget 891808 \
+  --budget-profile synthetic_trigger \
   --runner-args \
-    --agent-config path/to/exported-agent.yaml \
+    --agent-config sdk/benchmark/generic/configs/gaia_solver.yaml \
+    --production-parity-snapshot /tmp/gaia_solver_zh.parity.json \
+    --language zh \
     --evaluators gaia_exact_match \
-    --model-factory openai \
-    --max-steps 20 \
+    --max-steps 15 \
     --temperature 0
 ```
+
+P 组会使用 `passthrough`，C 组使用 `adaptive_compact`；两组共享 soft/hard。soft
+只在 C 组触发压缩，hard 对 P/C 都是安全天花板。
 
 一次 smoke：
 
 ```bash
 backend/.venv/bin/python \
   sdk/benchmark/generic/run_context_manager_comparison.py \
-  --dataset gaia-level1-web-search \
-  --run-prefix gaia-context-smoke-20260723 \
+  --dataset gaia-level1-reasoning \
+  --run-prefix gaia-reasoning-pc-smoke-20260724 \
   --repeat 1 \
   --formal-items 1 \
-  --compression-threshold 10000 \
+  --soft-input-budget 10000 \
+  --hard-input-budget 891808 \
+  --budget-profile synthetic_trigger \
   --runner-args \
-    --agent-config path/to/exported-agent.yaml \
+    --agent-config sdk/benchmark/generic/configs/gaia_solver.yaml \
+    --production-parity-snapshot /tmp/gaia_solver_zh.parity.json \
+    --language zh \
     --evaluators gaia_exact_match \
-    --max-steps 2 \
+    --max-steps 15 \
     --temperature 0
 ```
+
+若要使用英文模板，必须把 `--language` 改为 `en` 并使用单独导出的英文 snapshot。不能复用
+中文 snapshot。
 
 ## 参数
 
@@ -64,7 +80,10 @@ backend/.venv/bin/python \
 | `--smoke-items` | `1` | smoke 使用 dataset 前 N 项 |
 | `--skip-smoke` | 关闭 | 跳过 smoke |
 | `--formal-items` | 全部 | 正式阶段限制前 N 项 |
-| `--compression-threshold` | `10000` | C 组 token threshold |
+| `--compression-threshold` | `10000`（未传显式预算时） | 旧式阈值；soft 等于 threshold，hard 自动派生为 1.1 倍 |
+| `--soft-input-budget` | 无 | P/C 共用的显式 soft budget；必须与 hard 一起提供 |
+| `--hard-input-budget` | 无 | P/C 共用的显式 hard budget；必须大于 soft |
+| `--budget-profile` | `legacy_threshold` | 预算来源/实验意图分类；显式预算必须选择 synthetic profile |
 | `--seed` | `0` | P/C 执行顺序随机种子 |
 | `--required-url NAME=URL` | 无 | 调用模型前做服务可达性预检 |
 | `--python` | 当前解释器 | 子进程 Python |
@@ -83,15 +102,33 @@ comparison runner 控制以下参数，不能通过 `--runner-args` 覆盖：
 --token-threshold
 --soft-input-budget
 --hard-input-budget
+--budget-profile
 ```
+
+comparison runner 接受三个 profile：
+
+| profile | 预算要求 | 实验含义 |
+|---|---|---|
+| `legacy_threshold` | 只传或默认 `--compression-threshold` | 兼容旧实验；hard 为 threshold 的 1.1 倍 |
+| `synthetic_trigger` | 必须显式传 soft/hard | 人为降低 soft 以稳定或大概率触发 C 组压缩，hard 保持为安全容量 |
+| `synthetic_stress` | 必须显式传 soft/hard | 同时收紧 soft/hard，专门测压缩极限和 hard failure |
+
+`budget_profile` 只负责正确分类，不改变预算值。comparison runner 不接受
+`production_like`，因为 P/C 的主要目标是构造可归因的模拟实验；若需要单次生产容量复现，
+可直接调用 `run_benchmark.py --budget-profile production_like`。
+
+`--context-window-tokens` 仍可由 `run_benchmark.py` 接受，但当前 Benchmark 没有完整引入
+生产的容量解析，因此它不会自动根据 context window、最大输出、输出预留和 uncertainty
+reserve 推导 soft/hard。P/C 已显式传入预算时不要依赖它改变预算。
 
 ## Manifest 与公平性校验
 
-每组由 `run_benchmark.py` 写入 schema v2 resolved manifest。P/C 完成后自动检查：
+每组由 `run_benchmark.py` 写入 schema v3 resolved manifest。P/C 完成后自动检查：
 
 - dataset、item IDs、代码 commit；
 - 模型、endpoint、model factory、temperature、max steps；
 - tool schema hash、system prompt hash、evaluator；
+- parity snapshot hash 和 budget profile；
 - 两组均使用 `context_runtime=context_items`；
 - P 为 `passthrough`，C 为 `adaptive_compact`；
 - resolved hard input budget 存在；
@@ -129,6 +166,25 @@ P/C 每轮使用相同 item IDs，并生成二元 outcome matrix：
 `passthrough` 不是旧 Legacy：它仍经过 ContextItems assembly、预算估算、工具规范化、
 stable-prefix 和 hard-budget 检查。P 超过 hard budget 而失败属于新产品策略结果，必须与
 答案错误、工具错误分别统计。
+
+## Prompt/Tool parity 的使用边界
+
+`--production-parity-snapshot` 是 strict drift gate，不是 Agent YAML 的替代品：
+
+- `--agent-config` 仍负责构造实际 duty/constraint、Agent version、显式工具和其他运行参数；
+- snapshot 负责比较实际装配结果与预先冻结的 Prompt/ContextItem/resource/tool contract；
+- 未传 snapshot 仍能运行，但 manifest 标记为 `mechanism_only`；
+- 传入 snapshot 不代表完整复刻实时生产数据库，因为 snapshot 本身由导出的 YAML 和
+  Benchmark assembly 生成；
+- snapshot 与 language 绑定，切换 `en/zh` 必须重新导出；
+- `zh` 时 Benchmark 会和生产一样自动使用中文默认 `APP_DESCRIPTION`，无需手动 export；
+- trace 中的 `system_prompt` 使用生产 renderer，`### Available Resources` 应展示实际工具
+  及其描述/schema。
+
+Builtin tools 不是生产 Agent 配置里的静态工具。Benchmark 会和生产 assembly 一样被动加入
+`parallel_executor` 以及四个 builtin skill tools。没有配置 Skill 时可以不传
+`--skills-path`；非空 YAML `skills:` 的发现、tenant/version 可见性过滤和完整执行链路目前
+仍未完全模拟。
 
 ## L/P/C 历史实验
 

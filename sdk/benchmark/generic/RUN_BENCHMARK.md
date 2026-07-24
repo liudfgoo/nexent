@@ -55,6 +55,21 @@
 | `--constraint-prompt`  | 约束条件 prompt             |
 | `--few-shots-prompt`   | Few-shot 示例 prompt      |
 | `--system-prompt-file` | 自定义系统 prompt 文件（跳过模板引擎） |
+| `--production-parity-snapshot` | 可选 strict gate；运行前生成的 Prompt/ContextItem/resource/tool snapshot |
+| `--tenant-id` | builtin skill tools 的运行范围；默认依次取 CLI、YAML `agent_info.tenant_id`、`tenant_id` |
+| `--skills-path` | builtin skill tools 使用的本地 Skill 根目录；未传时读取 `SKILLS_PATH` |
+
+`--language` 会选择和生产相同的公共 Prompt 模板与 ContextItem 装配路径。未显式设置
+`APP_DESCRIPTION` 时，Benchmark 也会按语言使用与生产一致的默认值：
+
+```text
+zh -> Nexent 是一个开源智能体SDK和平台
+en -> Nexent is an open-source agent SDK and platform
+```
+
+`--language` 不会翻译 YAML 中的 `duty_prompt`、`constraint_prompt` 或
+`few_shots_prompt`；这些 Agent 自定义字段必须来自待测生产版本。切换语言后应重新生成对应
+snapshot，不能把 `en` snapshot 用于 `zh` run。
 
 ### 上下文管理
 
@@ -78,7 +93,30 @@ agent_config:
 | `--token-threshold` | 压缩阈值 |
 | `--soft-input-budget` | 显式 soft input budget |
 | `--hard-input-budget` | 显式 hard input budget |
-| `--context-window-tokens` | 模型 context-window 容量 |
+| `--budget-profile` | 预算来源/实验意图分类，只写入 manifest，不改变预算计算 |
+| `--context-window-tokens` | 记录到 ContextManager 的 context-window 值；当前不会执行完整生产容量解析 |
+
+预算解析规则：
+
+- 显式传入 `--soft-input-budget` / `--hard-input-budget` 时，ContextManager 直接使用这两个值；
+- 未显式传入时，soft 使用 `--token-threshold`，hard 使用 `token_threshold * 1.1`；
+- `--context-window-tokens` 当前不会根据模型的 `max_input_tokens`、输出预留和 uncertainty
+  reserve 自动推导 soft/hard，因此已经显式传入预算时通常不需要再传它；
+- P (`passthrough`) 仍执行 hard-budget 防护；超过 hard 后会报错，而不是无限制调用模型；
+- C (`adaptive_compact`) 压缩后仍超过 hard 时会报
+  `Context input remains over the model hard budget after compaction`。
+
+`run_benchmark.py` 可记录以下 profile：
+
+| profile | 含义 |
+|---|---|
+| `legacy_threshold` | 仅使用旧 `token_threshold` 及其 1.1 倍 hard 派生 |
+| `production_like` | 调用方已按生产容量规则计算并显式传入预算 |
+| `synthetic_trigger` | 人为降低 soft 以提高压缩触发率，同时把 hard 保持在可安全运行的容量内 |
+| `synthetic_stress` | 人为收紧 soft/hard，用于观察压缩极限和 hard-budget 失败，不作为正常准确率对照 |
+
+profile 是归因标签，不是容量解析器。若直接调用 `run_benchmark.py` 且显式预算但不传
+profile，manifest 会记录 `explicit_unclassified`。
 
 **逻辑流程**：
 1. 从 YAML 读取旧 `enable_context_manager`，映射为 policy；
@@ -273,7 +311,9 @@ python sdk/benchmark/generic/run_context_manager_comparison.py \
   --dataset gaia-level1-web-search \
   --run-prefix gaia-context-20260723 \
   --repeat 3 \
-  --compression-threshold 10000 \
+  --soft-input-budget 10000 \
+  --hard-input-budget 891808 \
+  --budget-profile synthetic_trigger \
   --required-url data-process=http://localhost:5010/health \
   --runner-args \
     --agent-config path/to/gaia-agent.yaml \
@@ -503,3 +543,74 @@ python run_benchmark.py \
 | 统一入口        | ❌                  | ❌               | ✅                 |
 
 **结论**：`run_benchmark.py` 完全替代 `run_experiment.py` 和 `re_evaluate.py`。
+## Prompt、Tool assembly 与 parity snapshot
+
+Benchmark 不经过 `backend/agents/create_agent_info.py`，因此在 benchmark assembly 中显式模拟
+生产的被动注入行为：
+
+- YAML `tools:` 只保存 Agent 显式配置的工具；
+- 运行时额外注入 `parallel_executor`；
+- 运行时额外注入 `run_skill_script`、`read_skill_md`、`read_skill_config`、
+  `write_skill_file`；
+- builtin skill tools 使用 `agent_id`、`tenant_id`、`version_no` 和 skills path
+  标记运行范围，不要求用户把它们写入 YAML；
+- YAML `skills:` 当前尚未实现生产的 Skill 发现、可见性过滤和完整执行链路。非空
+  `skills:` 不应被描述成已经完全对齐生产。
+
+trace output 的 `system_prompt` 使用生产 `ContextItemRenderer` 渲染压缩前静态上下文，因此
+`### Available Resources` 会包含实际装配的工具名称、描述、输入 schema 和输出类型，而不再
+只是空的资源标题。
+
+先从生产导出的 Agent YAML 渲染只读 snapshot（不会初始化 MinIO、模型或执行工具）：
+
+```bash
+backend/.venv/bin/python sdk/benchmark/generic/export_parity_snapshot.py \
+  --agent-config sdk/benchmark/generic/configs/gaia_solver.yaml \
+  --language zh \
+  --tenant-id tenant_id \
+  --output /tmp/gaia_solver_zh.parity.json
+```
+
+输出文件使用排他创建，不覆盖已有文件；重复导出时应换文件名或先明确处理旧文件。
+如果当前 Agent 没有配置 Skill，`--skills-path` 可以不传；它不是 Skill 开关，只是 builtin
+skill tools 真正执行脚本时使用的本地根目录。`tenant_id` 必须与待模拟的生产 Agent scope
+一致；若 YAML 是新版 `export_agent_config.py` 导出的，运行器会默认读取
+`agent_info.tenant_id`。
+
+正式运行时启用 strict gate：
+
+```bash
+backend/.venv/bin/python sdk/benchmark/generic/run_benchmark.py \
+  --agent-config sdk/benchmark/generic/configs/gaia_solver.yaml \
+  --production-parity-snapshot /tmp/gaia_solver_zh.parity.json \
+  --tenant-id tenant_id \
+  --language zh \
+  --dataset gaia-level1 \
+  --run-name gaia-production-parity
+```
+
+gate 比较 prompt component、ContextItem 集合/顺序/priority/required、resource 状态，以及
+canonical tool set/order/schema/implementation。它的作用是阻止实际 run 相对基准 snapshot
+发生漂移；snapshot 仍由同一份 Agent YAML 和 Benchmark assembly 生成，因此不能单独证明
+实时生产数据库、当前发布 Agent version 或动态资源与 Benchmark 完全一致。
+
+未传 snapshot 时实验可以运行，但 manifest 会标记
+`simulation_fidelity=mechanism_only`；传入并通过后标记
+`simulation_fidelity=production_snapshot`。snapshot 绑定 language、Prompt component hash、
+template version、ContextItem 和工具集合，所以修改 Prompt、切换 `en/zh`、修改工具或改变
+tenant/version scope 后都应重新导出。
+
+## 运行完整性检查
+
+`run_integrity.py` 是独立的只读事后检查器，用于检查 dataset item 覆盖、重复 item、评分器
+score 覆盖、trace output 必需字段、trace errors，以及可选 manifest 一致性：
+
+```bash
+backend/.venv/bin/python sdk/benchmark/generic/run_integrity.py \
+  --dataset gaia-level1-reasoning \
+  --run-name YOUR_RUN_NAME \
+  --evaluators gaia_exact_match \
+  --manifest sdk/benchmark/generic/artifacts/manifests/YOUR_RUN_NAME.manifest.json
+```
+
+返回码 `0` 表示完整，`1` 表示检查发现缺失或不一致，`2` 表示连接、认证或输入问题。

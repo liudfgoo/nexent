@@ -24,6 +24,31 @@ from agent_runner import (
 )
 
 
+def render_precompact_system_prompt(context_items: list) -> str:
+    """Render the static system context with the production ContextItem renderer."""
+    from nexent.core.agents.context.models import normalize_context_inputs
+    from nexent.core.agents.context.rendering import ContextItemRenderer
+
+    normalized = normalize_context_inputs(context_items)
+    messages = ContextItemRenderer().render(normalized)
+    text_parts = []
+    for message in messages:
+        if message.get("role") not in {"system", "developer"}:
+            continue
+        content = message.get("content", [])
+        if isinstance(content, str):
+            text_parts.append(content)
+            continue
+        text_parts.extend(
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == "text"
+            and block.get("text")
+        )
+    return "\n\n".join(text_parts)
+
+
 def _get_budget_threshold(agent_run_info: Any, budget_type: str) -> int:
     """Extract soft or hard budget threshold from agent config."""
     cm_config = getattr(agent_run_info.agent_config, "context_manager_config", None)
@@ -50,6 +75,11 @@ def make_nexent_task(
     experiment_time: str = None,
     model_factory: str = None,
     user_id: str = "user_id",
+    prompt_template_version: str = "",
+    prompt_template_source: str = "",
+    resource_support: dict = None,
+    intentional_empty_resources: dict = None,
+    prompt_components: dict = None,
 ):
     """Factory: create a Langfuse task function bound to agent config.
 
@@ -144,6 +174,7 @@ def make_nexent_task(
                 current_time=experiment_time,
                 model_factory=model_factory,
                 user_id=user_id,
+                prompt_components=prompt_components,
             )
 
         # Run agent (sync wrapper for Langfuse's sync task protocol)
@@ -156,12 +187,22 @@ def make_nexent_task(
             loop.close()
 
         context_items = agent_run_info.agent_config.context_items or []
-        system_prompt_text = "\n\n".join(
-            str((item.content or {}).get("text", ""))
-            for item in context_items
-            if str(getattr(item.type, "value", item.type)) == "system"
-        )
+        system_prompt_text = render_precompact_system_prompt(context_items)
         model_config = agent_run_info.model_config_list[0] if agent_run_info.model_config_list else None
+        try:
+            from parity_snapshot import build_parity_snapshot
+        except ImportError:
+            from .parity_snapshot import build_parity_snapshot
+        parity_snapshot = build_parity_snapshot(
+            context_items=context_items,
+            prompt_templates=agent_run_info.agent_config.prompt_templates,
+            tools=agent_run_info.agent_config.tools or [],
+            language=language,
+            template_version=prompt_template_version,
+            template_source=prompt_template_source,
+            resource_support=resource_support,
+            intentional_empty_resources=intentional_empty_resources,
+        )
 
         return {
             "final_answer": result.final_answer,
@@ -173,6 +214,7 @@ def make_nexent_task(
             "message_type_count": result.message_type_count,
             "steps": result.steps,
             "system_prompt": system_prompt_text,
+            "parity_snapshot": parity_snapshot,
             "model_config": {
                 "model_name": model_config.model_name if model_config else "",
                 "url": model_config.url if model_config else "",

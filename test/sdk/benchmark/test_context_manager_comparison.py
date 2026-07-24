@@ -12,6 +12,7 @@ from sdk.benchmark.generic.run_context_manager_comparison import (
     fetch_complete_dataset_run,
     fetch_run_results,
     paired_outcomes,
+    parse_args,
     validate_runner_args,
 )
 
@@ -20,8 +21,35 @@ def test_comparison_groups_isolate_processing_policy():
     groups = comparison_groups(10_000)
 
     assert [group.key for group in groups] == ["P", "C"]
-    assert groups[0].runner_args == ("--context-processing-mode", "passthrough")
-    assert groups[1].runner_args[-1] == "10000"
+    assert groups[0].runner_args == (
+        "--context-processing-mode",
+        "passthrough",
+        "--token-threshold",
+        "10000",
+        "--budget-profile",
+        "legacy_threshold",
+    )
+    assert groups[1].runner_args[-1] == "legacy_threshold"
+
+
+def test_comparison_groups_share_explicit_budgets_and_profile():
+    groups = comparison_groups(
+        soft_input_budget=10_000,
+        hard_input_budget=18_404,
+        budget_profile="synthetic_trigger",
+    )
+
+    for group in groups:
+        assert group.runner_args[-6:] == (
+            "--soft-input-budget",
+            "10000",
+            "--hard-input-budget",
+            "18404",
+            "--budget-profile",
+            "synthetic_trigger",
+        )
+    assert groups[0].runner_args[1] == "passthrough"
+    assert groups[1].runner_args[1] == "adaptive_compact"
 
 
 def test_runner_command_contains_owned_group_configuration():
@@ -47,7 +75,15 @@ def test_runner_command_contains_owned_group_configuration():
 
 @pytest.mark.parametrize(
     "argument",
-    ["--dataset", "--run-name=value", "--token-threshold", "--item-limit=2"],
+    [
+        "--dataset",
+        "--run-name=value",
+        "--token-threshold",
+        "--soft-input-budget",
+        "--hard-input-budget=18404",
+        "--budget-profile",
+        "--item-limit=2",
+    ],
 )
 def test_validate_runner_args_rejects_comparison_variables(argument):
     with pytest.raises(ValueError):
@@ -130,6 +166,51 @@ def test_build_run_name_is_paired_and_explicit():
         build_run_name("gaia-cm", "formal", 3, group)
         == "gaia-cm-formal-r03-c-adaptive-compact"
     )
+
+
+def test_parse_args_accepts_explicit_synthetic_trigger_budget(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "runner",
+            "--dataset",
+            "gaia",
+            "--run-prefix",
+            "run",
+            "--soft-input-budget",
+            "10000",
+            "--hard-input-budget",
+            "18404",
+            "--budget-profile",
+            "synthetic_trigger",
+        ],
+    )
+
+    args = parse_args()
+
+    assert args.soft_input_budget == 10_000
+    assert args.hard_input_budget == 18_404
+    assert args.compression_threshold is None
+
+
+def test_parse_args_rejects_partial_explicit_budget(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "runner",
+            "--dataset",
+            "gaia",
+            "--run-prefix",
+            "run",
+            "--soft-input-budget",
+            "10000",
+            "--budget-profile",
+            "synthetic_trigger",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        parse_args()
 
 
 def test_provider_cache_aggregate_uses_only_explicit_provider_metrics():

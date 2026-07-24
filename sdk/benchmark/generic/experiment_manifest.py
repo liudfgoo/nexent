@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 
-MANIFEST_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA_VERSION = 3
 SENSITIVE_KEYS = {
     "api_key",
     "authorization",
@@ -185,6 +185,9 @@ def build_manifest(
     agent_config: dict[str, Any],
     evaluator_names: list[str],
     observation_policy: dict[str, Any],
+    parity_snapshot: dict[str, Any] | None = None,
+    parity_gate: dict[str, Any] | None = None,
+    budget_profile: str = "legacy_threshold",
     started_at: str | None = None,
 ) -> dict[str, Any]:
     """Build a manifest from final effective values, not raw CLI inputs."""
@@ -236,6 +239,13 @@ def build_manifest(
         "evaluator_version": "code_commit",
         "context_item_types": agent_config.get("context_item_types", []),
         "observation_policy": observation_policy,
+        "parity_snapshot": parity_snapshot or {},
+        "parity_snapshot_hash": sha256_value(parity_snapshot or {}),
+        "parity_gate": parity_gate or {
+            "passed": None,
+            "simulation_fidelity": "mechanism_only",
+        },
+        "budget_profile": budget_profile,
     }
     manifest["manifest_hash"] = sha256_value(manifest)
     return manifest
