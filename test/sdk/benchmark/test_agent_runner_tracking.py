@@ -21,6 +21,10 @@ async def test_run_agent_with_tracking_builds_model_step_and_metrics(monkeypatch
                 "token_count",
                 json.dumps({
                     "estimated_context_tokens": 120,
+                    "uncompressed_est_tokens": 180,
+                    "context_processing_mode": "adaptive_compact",
+                    "token_threshold": 150,
+                    "hard_input_budget_tokens": 200,
                     "step_input_tokens": 100,
                     "step_output_tokens": 20,
                     "compression_calls": 1,
@@ -57,4 +61,130 @@ async def test_run_agent_with_tracking_builds_model_step_and_metrics(monkeypatch
     assert result.errors == ["tool failed"]
     assert result.steps[0]["token_usage"]["output_tokens"] == 20
     assert result.steps[0]["compression"]["calls"] == 1
+    assert result.processing_mode == "adaptive_compact"
+    assert result.over_soft_budget is True
+    assert result.over_hard_budget is False
+    assert result.max_raw_context_tokens == 180
+    assert result.net_token_saving == 10
     assert result.steps[1]["step_number"] == "final_answer"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_does_not_report_compression_savings(monkeypatch):
+    async def fake_agent_run(_):
+        yield json.dumps({"type": "step_count", "content": "1"})
+        yield json.dumps({
+            "type": "token_count",
+            "content": json.dumps({
+                "estimated_context_tokens": 100,
+                "step_input_tokens": 90,
+                "step_output_tokens": 10,
+                "uncompressed_est_tokens": 180,
+                "context_processing_mode": "passthrough",
+                "token_threshold": 150,
+                "hard_input_budget_tokens": 200,
+            }),
+        })
+        yield json.dumps({"type": "final_answer", "content": "final"})
+
+    monkeypatch.setattr(agent_runner, "agent_run", fake_agent_run)
+    result = await agent_runner.run_agent_with_tracking(
+        SimpleNamespace(query="question")
+    )
+
+    assert result.over_soft_budget is True
+    assert result.net_token_saving == 0
+
+
+@pytest.mark.asyncio
+async def test_configured_soft_budget_and_deterministic_compaction_are_tracked(
+    monkeypatch,
+):
+    async def fake_agent_run(_):
+        yield json.dumps({"type": "step_count", "content": "1"})
+        yield json.dumps({
+            "type": "token_count",
+            "content": json.dumps({
+                "estimated_context_tokens": 14700,
+                "step_input_tokens": 14650,
+                "step_output_tokens": 10,
+                "uncompressed_est_tokens": 18800,
+                "context_processing_mode": "adaptive_compact",
+                # The SDK stream historically exposed token_threshold=10000
+                # even when an explicit soft budget was configured.
+                "token_threshold": 10000,
+                "hard_input_budget_tokens": 18404,
+                "compression_calls": 0,
+            }),
+        })
+        yield json.dumps({"type": "final_answer", "content": "FINAL ANSWER: Claus"})
+
+    run_info = SimpleNamespace(
+        query="question",
+        agent_config=SimpleNamespace(
+            context_manager_config=SimpleNamespace(
+                processing_mode="adaptive_compact",
+                token_threshold=10000,
+                soft_input_budget_tokens=14723,
+                hard_input_budget_tokens=18404,
+            )
+        ),
+    )
+    monkeypatch.setattr(agent_runner, "agent_run", fake_agent_run)
+    result = await agent_runner.run_agent_with_tracking(run_info)
+
+    assert result.soft_budget_tokens == 14723
+    assert result.over_soft_budget is True
+    assert result.deterministic_compaction_calls == 1
+    assert result.net_token_saving == 4100
+
+
+@pytest.mark.asyncio
+async def test_adaptive_mode_without_compaction_does_not_report_savings(monkeypatch):
+    async def fake_agent_run(_):
+        yield json.dumps({"type": "step_count", "content": "1"})
+        yield json.dumps({
+            "type": "token_count",
+            "content": json.dumps({
+                "estimated_context_tokens": 13400,
+                "step_input_tokens": 13300,
+                "step_output_tokens": 10,
+                "uncompressed_est_tokens": 13400,
+                "context_processing_mode": "adaptive_compact",
+                "soft_input_budget_tokens": 14723,
+                "hard_input_budget_tokens": 18404,
+                "compression_calls": 0,
+            }),
+        })
+        yield json.dumps({"type": "final_answer", "content": "FINAL ANSWER: Claus"})
+
+    monkeypatch.setattr(agent_runner, "agent_run", fake_agent_run)
+    result = await agent_runner.run_agent_with_tracking(
+        SimpleNamespace(query="question")
+    )
+
+    assert result.over_soft_budget is False
+    assert result.deterministic_compaction_calls == 0
+    assert result.net_token_saving == 0
+
+
+@pytest.mark.asyncio
+async def test_hard_budget_error_updates_budget_evidence(monkeypatch):
+    async def fake_agent_run(_):
+        yield json.dumps({"type": "step_count", "content": "1"})
+        yield json.dumps({
+            "type": "error",
+            "content": (
+                "Context input remains over the model hard budget after "
+                "compaction: 13302 > 11000 tokens"
+            ),
+        })
+
+    monkeypatch.setattr(agent_runner, "agent_run", fake_agent_run)
+    result = await agent_runner.run_agent_with_tracking(
+        SimpleNamespace(query="question")
+    )
+
+    assert result.over_hard_budget is True
+    assert result.hard_budget_tokens == 11000
+    assert result.peak_context_tokens == 13302

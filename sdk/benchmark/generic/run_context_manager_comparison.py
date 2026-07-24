@@ -256,6 +256,33 @@ def fetch_run_summary_cache(
     return results
 
 
+def fetch_run_budget_evidence(
+    langfuse: Any,
+    dataset_name: str,
+    run_name: str,
+    expected_item_ids: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Fetch per-item budget/overflow evidence from trace outputs."""
+    run = fetch_complete_dataset_run(
+        langfuse,
+        dataset_name,
+        run_name,
+        expected_item_ids=expected_item_ids,
+    )
+    results = {}
+    for run_item in run.dataset_run_items:
+        trace = langfuse.get_trace(run_item.trace_id)
+        output = trace.output
+        if isinstance(output, str):
+            try:
+                output = json.loads(output)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                output = {}
+        budget = output.get("budget_evidence", {}) if isinstance(output, dict) else {}
+        results[str(run_item.dataset_item_id)] = budget
+    return results
+
+
 def fetch_complete_dataset_run(
     langfuse: Any,
     dataset_name: str,
@@ -369,6 +396,32 @@ def aggregate_provider_cache(
     }
 
 
+def aggregate_budget_evidence(
+    item_metrics: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate budget/overflow evidence across items."""
+    total_items = len(item_metrics)
+    over_soft = sum(1 for m in item_metrics.values() if m.get("over_soft_budget"))
+    over_hard = sum(1 for m in item_metrics.values() if m.get("over_hard_budget"))
+    compression_triggered = sum(1 for m in item_metrics.values() if m.get("compression_triggered"))
+    peak_tokens_list = [m.get("peak_context_tokens", 0) for m in item_metrics.values()]
+    return {
+        "total_items": total_items,
+        "over_soft_budget_count": over_soft,
+        "over_hard_budget_count": over_hard,
+        "compression_triggered_count": compression_triggered,
+        "overflow_avoidance_rate": (
+            round(1 - over_hard / total_items, 4) if total_items else None
+        ),
+        "max_peak_context_tokens": max(peak_tokens_list) if peak_tokens_list else 0,
+        "avg_peak_context_tokens": (
+            round(sum(peak_tokens_list) / len(peak_tokens_list))
+            if peak_tokens_list
+            else 0
+        ),
+    }
+
+
 def paired_outcomes(group_results: dict[str, dict[str, bool]]) -> dict[str, Any]:
     """Build the paired P/C outcome matrix for one repeat."""
     item_ids = {
@@ -424,7 +477,7 @@ def validate_manifest_parity(run_names: dict[str, str]) -> dict[str, Any]:
         "dataset_name",
         "dataset_version",
         "dataset_item_ids",
-        "code_commit",
+        "source_tree_hash",
         "benchmark_lifecycle_mode",
         "main_model",
         "summary_model",
@@ -450,6 +503,20 @@ def validate_manifest_parity(run_names: dict[str, str]) -> dict[str, Any]:
             "P/C resolved manifest parity failed: "
             + ", ".join(sorted(mismatches))
         )
+    commit_values = {
+        key: manifest.get("code_commit") for key, manifest in manifests.items()
+    }
+    if len(set(commit_values.values())) > 1:
+        tree_values = {
+            key: manifest.get("source_tree_hash") for key, manifest in manifests.items()
+        }
+        if len(set(tree_values.values())) == 1:
+            print(
+                "WARNING: code_commit differs across groups but source_tree_hash "
+                f"is identical ({tree_values.get('P', '')[:12]}...); "
+                f"commits: {commit_values}",
+                file=sys.stderr,
+            )
     modes = {key: manifest.get("context_processing_mode") for key, manifest in manifests.items()}
     if modes != {"P": "passthrough", "C": "adaptive_compact"}:
         raise RuntimeError(f"P/C processing modes are invalid: {modes}")
@@ -538,6 +605,26 @@ def write_report_exclusive(report: dict[str, Any], prefix: str) -> tuple[Path, P
                 f"| {result['phase']} | {result['repeat_index']} | {group} "
                 f"| {cache['summary_cache_hits']} "
                 f"| {', '.join(cache['summary_cache_types']) or 'none'} |"
+            )
+    lines.extend([
+        "",
+        "## Budget & overflow",
+        "",
+        "| Phase | Repeat | Group | Items | Over soft | Over hard | Compression triggered | Avoidance rate | Max peak ctx |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|",
+    ])
+    for result in report["results"]:
+        for group in ("P", "C"):
+            budget = result["budget_evidence"][group]
+            avoidance = budget["overflow_avoidance_rate"]
+            lines.append(
+                f"| {result['phase']} | {result['repeat_index']} | {group} "
+                f"| {budget['total_items']} "
+                f"| {budget['over_soft_budget_count']} "
+                f"| {budget['over_hard_budget_count']} "
+                f"| {budget['compression_triggered_count']} "
+                f"| {f'{avoidance:.2%}' if avoidance is not None else 'N/A'} "
+                f"| {budget['max_peak_context_tokens']} |"
             )
     with markdown_path.open("x", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -689,6 +776,54 @@ def main() -> None:
             )
             for key, run_name in run_names.items()
         }
+        budget_evidence = {
+            key: aggregate_budget_evidence(
+                fetch_run_budget_evidence(
+                    langfuse,
+                    args.dataset,
+                    run_name,
+                    expected_item_ids=dataset_item_ids[:item_limit],
+                )
+            )
+            for key, run_name in run_names.items()
+        }
+
+        try:
+            from .run_integrity import check_run_integrity
+        except ImportError:
+            from run_integrity import check_run_integrity
+
+        integrity: dict[str, Any] = {}
+        evaluator_names = _all_evaluators(args.runner_args)
+        for key, run_name in run_names.items():
+            manifest_data = None
+            try:
+                from experiment_manifest import manifest_path as _mp
+
+                _manifest_dir = ARTIFACT_ROOT / "manifests"
+                _mpath = _mp(_manifest_dir, run_name)
+                if _mpath.exists():
+                    manifest_data = json.loads(
+                        _mpath.read_text(encoding="utf-8")
+                    )
+            except Exception:
+                pass
+            integrity_report = check_run_integrity(
+                langfuse=langfuse,
+                dataset_name=args.dataset,
+                run_name=run_name,
+                expected_item_ids=dataset_item_ids[:item_limit],
+                evaluator_names=evaluator_names,
+                manifest=manifest_data,
+            )
+            integrity[key] = integrity_report.to_dict()
+            if not integrity_report.run_complete:
+                print(
+                    f"WARNING: integrity check INCOMPLETE for "
+                    f"{key} ({run_name})"
+                )
+                print(integrity_report.summary())
+
         report["results"].append(
             {
                 "phase": phase,
@@ -699,6 +834,8 @@ def main() -> None:
                 "paired": paired_outcomes(group_results),
                 "provider_cache": provider_cache,
                 "summary_cache": summary_cache,
+                "budget_evidence": budget_evidence,
+                "integrity": integrity,
             }
         )
 
@@ -714,6 +851,20 @@ def _primary_evaluator(runner_args: list[str]) -> str:
     if index >= len(runner_args) or runner_args[index].startswith("--"):
         raise ValueError("--evaluators requires at least one evaluator")
     return runner_args[index]
+
+
+def _all_evaluators(runner_args: list[str]) -> list[str]:
+    """Extract all evaluator names from runner arguments."""
+    if "--evaluators" not in runner_args:
+        return ["exact_match"]
+    index = runner_args.index("--evaluators") + 1
+    evaluators: list[str] = []
+    while index < len(runner_args) and not runner_args[index].startswith("--"):
+        evaluators.append(runner_args[index])
+        index += 1
+    if not evaluators:
+        raise ValueError("--evaluators requires at least one evaluator")
+    return evaluators
 
 
 if __name__ == "__main__":

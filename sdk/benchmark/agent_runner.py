@@ -10,7 +10,9 @@ Provides:
 import json
 import logging
 import os
+import re
 import sys
+import time
 from typing import Callable, Optional
 
 
@@ -453,6 +455,10 @@ class AgentRunResult:
         self.total_output_tokens: int = 0
         self.steps: list = []
         self.compression_calls: int = 0
+        # ContextManager distinguishes model-based history summarization from
+        # deterministic item compaction. ``compression_calls`` only covers the
+        # former, so track the latter separately for benchmark evidence.
+        self.deterministic_compaction_calls: int = 0
         self.compression_input_tokens: int = 0
         self.compression_output_tokens: int = 0
         self.compression_cache_hits: int = 0
@@ -466,6 +472,23 @@ class AgentRunResult:
         self.provider_uncached_input_tokens: int = 0
         self.provider_cache_statuses: set[str] = set()
         self.provider_cache_metrics_sources: set[str] = set()
+
+        # P1-6: Net token saving (computed at end from existing fields)
+        self.net_token_saving: int = 0
+
+        # P1-7: Wall-clock latency
+        self.wall_clock_seconds: float = 0.0
+        self.step_durations: list = []
+
+        # P1-8: Peak context
+        self.peak_context_tokens: int = 0
+        self.peak_context_step: int = 0
+        self.processing_mode: str = ""
+        self.soft_budget_tokens: int = 0
+        self.hard_budget_tokens: int = 0
+        self.max_raw_context_tokens: int = 0
+        self.over_soft_budget: bool = False
+        self.over_hard_budget: bool = False
 
     def __repr__(self):
         return f"AgentRunResult(final_answer_len={len(self.final_answer)}, " \
@@ -496,8 +519,23 @@ async def run_agent_with_tracking(
         >>> print(result.message_type_count)
     """
     result = AgentRunResult()
+    _wall_start = time.monotonic()
     current_step = None
     initial_query = agent_run_info.query
+    agent_config = getattr(agent_run_info, "agent_config", None)
+    context_config = getattr(agent_config, "context_manager_config", None)
+    if context_config is not None:
+        result.processing_mode = str(
+            getattr(context_config, "processing_mode", "") or ""
+        )
+        result.soft_budget_tokens = int(
+            getattr(context_config, "soft_input_budget_tokens", 0)
+            or getattr(context_config, "token_threshold", 0)
+            or 0
+        )
+        result.hard_budget_tokens = int(
+            getattr(context_config, "hard_input_budget_tokens", 0) or 0
+        )
 
     async for chunk in agent_run(agent_run_info):
         if not chunk:
@@ -562,6 +600,17 @@ async def run_agent_with_tracking(
         # Handle error
         elif msg_type == "error":
             result.errors.append(msg_content)
+            hard_budget_match = re.search(
+                r"after compaction:\s*(\d+)\s*>\s*(\d+)\s*tokens",
+                msg_content,
+            )
+            if hard_budget_match:
+                actual_tokens, hard_budget = map(int, hard_budget_match.groups())
+                result.over_hard_budget = True
+                result.hard_budget_tokens = hard_budget
+                if actual_tokens > result.peak_context_tokens:
+                    result.peak_context_tokens = actual_tokens
+                    result.peak_context_step = result.step_count
             if current_step is not None:
                 separator = "\n" if current_step["observation"] else ""
                 current_step["observation"] += f"{separator}Error:\n{msg_content}"
@@ -573,6 +622,17 @@ async def run_agent_with_tracking(
             try:
                 token_data = json.loads(msg_content)
                 api_input = token_data.get("step_input_tokens", 0) or 0
+                processing_mode = token_data.get("context_processing_mode")
+                if processing_mode:
+                    result.processing_mode = processing_mode
+                soft_budget = token_data.get("soft_input_budget_tokens")
+                if soft_budget is None and not result.soft_budget_tokens:
+                    soft_budget = token_data.get("token_threshold")
+                hard_budget = token_data.get("hard_input_budget_tokens")
+                if soft_budget:
+                    result.soft_budget_tokens = int(soft_budget)
+                if hard_budget:
+                    result.hard_budget_tokens = int(hard_budget)
                 result.total_input_tokens += (
                     token_data.get("estimated_context_tokens") or api_input
                 )
@@ -591,6 +651,22 @@ async def run_agent_with_tracking(
                 result.compression_output_tokens += token_data.get("compression_output_tokens", 0) or 0
                 result.compression_cache_hits += token_data.get("compression_cache_hits", 0) or 0
                 result.total_uncompressed_est_tokens += token_data.get("uncompressed_est_tokens", 0) or 0
+                raw_context = token_data.get("uncompressed_est_tokens", 0) or 0
+                result.max_raw_context_tokens = max(
+                    result.max_raw_context_tokens, raw_context
+                )
+                if result.soft_budget_tokens and raw_context > result.soft_budget_tokens:
+                    result.over_soft_budget = True
+                    estimated_context = (
+                        token_data.get("estimated_context_tokens", 0) or 0
+                    )
+                    if (
+                        result.processing_mode == "adaptive_compact"
+                        and estimated_context
+                        and estimated_context < raw_context
+                        and not (token_data.get("compression_calls", 0) or 0)
+                    ):
+                        result.deterministic_compaction_calls += 1
                 cache_types = token_data.get("compression_cache_types", []) or []
                 for cache_type in cache_types:
                     if cache_type not in result.compression_cache_types:
@@ -654,12 +730,51 @@ async def run_agent_with_tracking(
                                 "provider_uncached_input_tokens", 0
                             ) or 0,
                         }
+
+                # P1-7: Per-step duration
+                step_duration = token_data.get("duration", 0.0) or 0.0
+                if step_duration > 0:
+                    result.step_durations.append(step_duration)
+                    if current_step is not None:
+                        current_step["duration_seconds"] = step_duration
+
+                # P1-8: Peak context tracking
+                estimated_ctx = token_data.get("estimated_context_tokens", 0) or 0
+                if estimated_ctx > result.peak_context_tokens:
+                    result.peak_context_tokens = estimated_ctx
+                    result.peak_context_step = result.step_count
             except (json.JSONDecodeError, TypeError):
                 pass
 
     # Fallback when no final answer
     if not result.final_answer:
         result.final_answer = result.full_response if result.full_response else "(No response received)"
+
+    # P1-7: Wall-clock elapsed
+    result.wall_clock_seconds = round(time.monotonic() - _wall_start, 3)
+
+    # P1-6: Compute net token saving
+    compression_overhead = (
+        result.compression_input_tokens + result.compression_output_tokens
+    )
+    if (
+        result.processing_mode == "adaptive_compact"
+        and (
+            result.compression_calls > 0
+            or result.deterministic_compaction_calls > 0
+        )
+    ):
+        result.net_token_saving = max(
+            0,
+            result.total_uncompressed_est_tokens
+            - result.total_input_tokens
+            - compression_overhead,
+        )
+    else:
+        # Passthrough does not perform context compaction.  Differences between
+        # raw estimates and provider/API token counts are measurement deltas,
+        # not compression savings.
+        result.net_token_saving = 0
 
     return result
 

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import subprocess
+import tempfile
 from dataclasses import fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +66,106 @@ def resolve_code_commit(repo_root: Path) -> str:
     return result.stdout.strip()
 
 
+def compute_source_tree_hash(repo_root: Path) -> str:
+    """Compute a content hash of the tracked working tree via a temporary Git index.
+
+    Uses a temporary index file to:
+    1. git read-tree HEAD
+    2. git add -u (update index with working tree changes)
+    3. git write-tree (produce a tree hash)
+
+    This does NOT modify the real index, working tree, or create any commit.
+    """
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix="bench_idx_")
+    os.close(tmp_fd)
+    try:
+        env = {**os.environ, "GIT_INDEX_FILE": tmp_path}
+        subprocess.run(
+            ["git", "read-tree", "HEAD"],
+            cwd=repo_root,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "add", "-u"],
+            cwd=repo_root,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        result = subprocess.run(
+            ["git", "write-tree"],
+            cwd=repo_root,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        return f"error:{exc.stderr.strip() or exc.cmd}"
+    except FileNotFoundError:
+        return "error:git not found"
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+_UNTRACKED_EXCLUDE_DIRS = {"artifacts", "__pycache__", ".pytest_cache"}
+_UNTRACKED_EXCLUDE_SUFFIXES = {".pyc"}
+_UNTRACKED_INCLUDE_PATTERNS = ("sdk/", "backend/")
+_UNTRACKED_INCLUDE_SUFFIXES = (".yaml", ".yml")
+
+
+def check_untracked_risk(repo_root: Path) -> dict[str, Any]:
+    """Check for untracked files that may participate in benchmark execution."""
+    status_result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked_dirty = any(
+        line[:2] != "??" for line in status_result.stdout.splitlines() if line.strip()
+    )
+
+    untracked_result = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    relevant: list[str] = []
+    for raw_path in untracked_result.stdout.splitlines():
+        path = raw_path.strip()
+        if not path:
+            continue
+        parts = Path(path).parts
+        if any(part in _UNTRACKED_EXCLUDE_DIRS for part in parts):
+            continue
+        if any(path.endswith(suffix) for suffix in _UNTRACKED_EXCLUDE_SUFFIXES):
+            continue
+        is_relevant = (
+            any(path.startswith(prefix) for prefix in _UNTRACKED_INCLUDE_PATTERNS)
+            or any(path.endswith(suffix) for suffix in _UNTRACKED_INCLUDE_SUFFIXES)
+        )
+        if is_relevant:
+            relevant.append(path)
+
+    return {
+        "tracked_worktree_dirty": tracked_dirty,
+        "relevant_untracked_files": sorted(relevant),
+        "source_snapshot_method": "temporary_index_write_tree_v1",
+    }
+
+
 def build_manifest(
     *,
     dataset_name: str,
@@ -101,6 +203,8 @@ def build_manifest(
         "dataset_item_ids": dataset_item_ids,
         "run_name": run_name,
         "code_commit": resolve_code_commit(repo_root),
+        "source_tree_hash": compute_source_tree_hash(repo_root),
+        **check_untracked_risk(repo_root),
         "started_at": started_at or datetime.now(timezone.utc).isoformat(),
         "environment": {
             "hostname": platform.node(),

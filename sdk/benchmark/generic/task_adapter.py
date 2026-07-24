@@ -10,6 +10,7 @@ bound to a specific agent configuration. The task function:
 import asyncio
 import os
 import sys
+from typing import Any
 
 # Path setup — must happen before agent_runner import
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,6 +22,16 @@ from agent_runner import (
     run_agent_with_tracking,
     AgentRunResult,
 )
+
+
+def _get_budget_threshold(agent_run_info: Any, budget_type: str) -> int:
+    """Extract soft or hard budget threshold from agent config."""
+    cm_config = getattr(agent_run_info.agent_config, "context_manager_config", None)
+    if cm_config is None:
+        return 0
+    if budget_type == "soft":
+        return getattr(cm_config, "soft_input_budget_tokens", 0) or getattr(cm_config, "token_threshold", 0) or 0
+    return getattr(cm_config, "hard_input_budget_tokens", 0) or int(getattr(cm_config, "token_threshold", 0) * 1.1) or 0
 
 
 def make_nexent_task(
@@ -213,6 +224,9 @@ def make_nexent_task(
             },
             "compression": {
                 "calls": result.compression_calls,
+                "deterministic_compaction_calls": (
+                    result.deterministic_compaction_calls
+                ),
                 "input_tokens": result.compression_input_tokens,
                 "output_tokens": result.compression_output_tokens,
                 "summary_cache_hits": result.summary_cache_hits,
@@ -220,6 +234,45 @@ def make_nexent_task(
                 "total_uncompressed_est_tokens": result.total_uncompressed_est_tokens,
             },
             "provider_cache": _provider_cache_result(result),
+            "latency": {
+                "wall_clock_seconds": result.wall_clock_seconds,
+                "step_durations": result.step_durations,
+                "total_step_duration_seconds": round(sum(result.step_durations), 3),
+            },
+            "peak_context": {
+                "peak_context_tokens": result.peak_context_tokens,
+                "peak_context_step": result.peak_context_step,
+            },
+            "token_saving": {
+                "total_uncompressed_est_tokens": result.total_uncompressed_est_tokens,
+                "total_input_tokens": result.total_input_tokens,
+                "compression_overhead_tokens": (
+                    result.compression_input_tokens + result.compression_output_tokens
+                ),
+                "net_token_saving": getattr(result, "net_token_saving", 0),
+            },
+            "budget_evidence": {
+                "over_soft_budget": result.over_soft_budget,
+                "over_hard_budget": result.over_hard_budget,
+                "compression_triggered": (
+                    result.compression_calls > 0
+                    or result.deterministic_compaction_calls > 0
+                ),
+                "peak_context_tokens": result.peak_context_tokens,
+                "peak_context_step": result.peak_context_step,
+                "max_raw_context_tokens": result.max_raw_context_tokens,
+                "processing_mode": result.processing_mode,
+                "soft_budget_tokens": (
+                    result.soft_budget_tokens
+                    or _get_budget_threshold(agent_run_info, "soft")
+                ),
+                "hard_budget_tokens": (
+                    result.hard_budget_tokens
+                    or _get_budget_threshold(agent_run_info, "hard")
+                ),
+                "total_input_tokens": result.total_input_tokens,
+                "total_uncompressed_est_tokens": result.total_uncompressed_est_tokens,
+            },
         }
 
     return task

@@ -869,6 +869,17 @@ Additional Args:
         if code_output is not None and code_output.output is not None:
             truncated_output = truncate_content(str(code_output.output))
             observation += "Last output from code snippet:\n" + truncated_output
+            # ``code_output.logs`` is empty for tools that return a value
+            # directly (for example ExaSearchTool).  The benchmark consumes the
+            # observer stream rather than CoreAgent memory, so publish the
+            # returned value as an execution-log suffix as well.  When logs are
+            # present this suffix completes, rather than duplicates, the
+            # observation already emitted above.
+            self.observer.add_message(
+                self.agent_name,
+                ProcessType.EXECUTION_LOGS,
+                "Last output from code snippet:\n" + truncated_output,
+            )
         memory_step.observations = observation
 
         verification_controller = getattr(self, "verification_controller", None)

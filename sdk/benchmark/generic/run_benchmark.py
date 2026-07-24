@@ -158,6 +158,9 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
     agg_provider_cache_hit_calls = 0
     agg_provider_cached_tokens = 0
     agg_provider_input_tokens = 0
+    agg_wall_clock_seconds = 0.0
+    agg_peak_context_tokens = 0
+    agg_net_token_saving = 0
     manifest = None
     manifest_path = None
     dataset_item_ids = [str(item.id) for item in items]
@@ -347,6 +350,17 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                 value=provider_cache.get("provider_cached_input_ratio", 0.0) or 0.0,
             )
 
+        latency = output.get("latency", {})
+        agg_wall_clock_seconds += latency.get("wall_clock_seconds", 0.0) or 0.0
+
+        peak_ctx = output.get("peak_context", {})
+        item_peak = peak_ctx.get("peak_context_tokens", 0) or 0
+        if item_peak > agg_peak_context_tokens:
+            agg_peak_context_tokens = item_peak
+
+        token_saving = output.get("token_saving", {})
+        agg_net_token_saving += token_saving.get("net_token_saving", 0) or 0
+
         primary_score = next(iter(item_scores.values()), 0.0)
         if primary_score >= 1.0:
             passed += 1
@@ -388,6 +402,12 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
         )
     else:
         print("  Provider prefix cache: unsupported or metrics unavailable")
+    if n > 0:
+        print(f"  Latency:")
+        print(f"    Total wall-clock:    {agg_wall_clock_seconds:.1f}s")
+        print(f"    Avg per item:        {agg_wall_clock_seconds / n:.1f}s")
+    print(f"  Peak context:          {agg_peak_context_tokens} tokens")
+    print(f"  Net token saving:      {agg_net_token_saving} tokens")
     print(f"\nView in Langfuse: {os.environ.get('LANGFUSE_HOST', '')}/dataset/{dataset.id}")
     print(f"{'='*60}")
 
