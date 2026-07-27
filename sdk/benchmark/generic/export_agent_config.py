@@ -68,13 +68,13 @@ def export_agent_config(agent_id: int = None, agent_name: str = None,
         # Find agent by ID or name
         if agent_id:
             cursor.execute("""
-                SELECT agent_id, display_name, current_version_no 
+                SELECT agent_id, display_name, current_version_no, tenant_id
                 FROM ag_tenant_agent_t 
                 WHERE agent_id = %s AND delete_flag = 'N'
             """, (agent_id,))
         elif agent_name:
             cursor.execute("""
-                SELECT agent_id, display_name, current_version_no 
+                SELECT agent_id, display_name, current_version_no, tenant_id
                 FROM ag_tenant_agent_t 
                 WHERE display_name = %s AND delete_flag = 'N'
             """, (agent_name,))
@@ -85,7 +85,7 @@ def export_agent_config(agent_id: int = None, agent_name: str = None,
         if not result:
             raise ValueError(f"Agent not found: id={agent_id}, name={agent_name}")
         
-        agent_id, display_name, current_version = result
+        agent_id, display_name, current_version, tenant_id = result
         target_version = version if version is not None else current_version
         
         print(f"Exporting agent: {display_name} (ID: {agent_id}, Version: {target_version})")
@@ -184,6 +184,7 @@ def export_agent_config(agent_id: int = None, agent_name: str = None,
         config = {
             "agent_info": {
                 "agent_id": agent_id,
+                "tenant_id": tenant_id,
                 "name": name,
                 "display_name": display_name,
                 "description": description,

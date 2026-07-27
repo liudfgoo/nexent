@@ -488,6 +488,14 @@ def main():
                         help="Custom few shots prompt (overrides YAML)")
     parser.add_argument("--system-prompt-file", type=str,
                         help="Path to custom system prompt file (bypasses template)")
+    parser.add_argument(
+        "--tenant-id",
+        help="Tenant identity used by passively injected builtin skill tools",
+    )
+    parser.add_argument(
+        "--skills-path",
+        help="Local skill root passed to production-equivalent builtin skill tools",
+    )
     parser.add_argument("--experiment-time", type=str,
                         help=argparse.SUPPRESS)
     
@@ -630,9 +638,19 @@ def main():
         )
         return
 
-    from agent_runner import build_tools_from_yaml
+    from agent_runner import build_tools_from_yaml, inject_production_managed_tools
     tools_yaml = agent_config.get("tools", [])
     tools = build_tools_from_yaml(tools_yaml) if tools_yaml else []
+    agent_info = agent_config.get("agent_info", {})
+    tenant_id = args.tenant_id or agent_info.get("tenant_id") or "tenant_id"
+    skills_path = args.skills_path or os.getenv("SKILLS_PATH")
+    tools = inject_production_managed_tools(
+        tools,
+        agent_id=int(agent_info.get("agent_id", 0) or 0),
+        tenant_id=str(tenant_id),
+        version_no=int(agent_cfg.get("version_no", 0) or 0),
+        local_skills_dir=skills_path,
+    )
 
     # Run new experiment
     from task_adapter import make_nexent_task

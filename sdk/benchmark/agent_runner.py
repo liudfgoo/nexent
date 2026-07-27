@@ -15,7 +15,11 @@ import re
 from datetime import datetime
 from typing import AsyncIterator, Callable, Optional
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+if "pytest" not in sys.modules:
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    except (AttributeError, ValueError):
+        pass  # buffer already wrapped or closed
 
 from jinja2 import Template, StrictUndefined
 from smolagents.utils import BASE_BUILTIN_MODULES
@@ -23,10 +27,10 @@ from dotenv import load_dotenv
 import string
 
 # ============ Environment Setup ============
-# Add parent directory to sys.path so paths.py can be found, then import it.
+# Add current directory to sys.path so paths.py can be found, then import it.
 # paths.py resolves PROJECT_ROOT/SDK_DIR/BACKEND_DIR via .git discovery and
 # injects them into sys.path automatically — no manual path manipulation needed.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import paths  # noqa: F401 — side-effect: adds sdk/, backend/ to sys.path
 
 from utils.prompt_template_utils import get_agent_prompt_template
@@ -534,17 +538,24 @@ def _build_analyze_tool_metadata(class_name: str) -> dict:
     return metadata
 
 
-def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
+def build_tools_from_yaml(
+    tools_yaml: list,
+    *,
+    include_runtime_metadata: bool = True,
+) -> list[ToolConfig]:
     """Reconstruct ToolConfig objects from exported YAML tool entries.
 
     Args:
         tools_yaml: List of tool dicts from YAML 'tools' section.
                     Each entry has: tool_name, tool_class, tool_source,
                     tool_description, tool_params, enabled.
+        include_runtime_metadata: When True (default), Analyze* tools get
+            metadata constructed from environment variables. Snapshot-only
+            callers disable this so exporting schemas never initializes
+            storage or model clients.
 
     Returns:
         List of ToolConfig objects ready for make_nexent_task(tools=...).
-        Analyze* tools get metadata constructed from environment variables.
         Tools depending on external services (KB, memory) are skipped with a warning.
     """
     if not tools_yaml:
@@ -566,7 +577,7 @@ def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
             continue
 
         metadata = None
-        if class_name in _ANALYZE_TOOL_CLASSES:
+        if include_runtime_metadata and class_name in _ANALYZE_TOOL_CLASSES:
             metadata = _build_analyze_tool_metadata(class_name)
 
         tool_configs.append(ToolConfig(
@@ -586,6 +597,97 @@ def build_tools_from_yaml(tools_yaml: list) -> list[ToolConfig]:
               f"{', '.join(skipped)}")
 
     return tool_configs
+
+
+def inject_production_managed_tools(
+    tools: list[ToolConfig],
+    *,
+    agent_id: int,
+    tenant_id: str,
+    version_no: int,
+    local_skills_dir: str | None,
+) -> list[ToolConfig]:
+    """Mirror production's builtin skill-tool assembly from create_agent_info.py.
+
+    Production automatically appends the following builtin skill tools to
+    every agent's tool list:
+      - run_skill_script  (RunSkillScriptTool)
+      - read_skill_md     (ReadSkillMdTool)
+      - read_skill_config (ReadSkillConfigTool)
+      - write_skill_file  (WriteSkillFileTool)
+
+    These tools are not arbitrary command executors: script paths must reside
+    within a designated Skill directory, and Skill visibility is scoped by
+    agent_id, tenant_id, and version_no.
+
+    This function replicates that passive injection so the Generic Benchmark
+    tool set matches production's actual assembly. Tools already present in
+    the YAML (by name) are not duplicated.
+
+    Args:
+        tools: Existing ToolConfig list from build_tools_from_yaml().
+        agent_id: Agent identity for skill visibility scoping.
+        tenant_id: Tenant identity for skill visibility scoping.
+        version_no: Version number for skill visibility scoping.
+        local_skills_dir: Local skill root directory (None disables skill tools).
+
+    Returns:
+        Updated tool list with builtin skill tools appended.
+    """
+    existing_names = {tool.name for tool in tools}
+    skill_context = {
+        "agent_id": agent_id,
+        "tenant_id": tenant_id,
+        "version_no": version_no,
+        "_benchmark_assembly_origin": "injected_builtin",
+    }
+    params = {"local_skills_dir": local_skills_dir}
+    definitions = (
+        (
+            "RunSkillScriptTool",
+            "run_skill_script",
+            "Execute a skill script with given parameters. Use this to run "
+            "Python or shell scripts that are part of a skill.",
+            '{"skill_name": "str", "script_path": "str", "params": "dict"}',
+        ),
+        (
+            "ReadSkillMdTool",
+            "read_skill_md",
+            "Read skill execution guide and optional additional files. Always "
+            "reads SKILL.md first, then optionally reads additional files.",
+            '{"skill_name": "str", "additional_files": "list[str]"}',
+        ),
+        (
+            "ReadSkillConfigTool",
+            "read_skill_config",
+            "Read the config.yaml file from a skill directory. Returns JSON "
+            "containing configuration variables needed for skill workflows.",
+            '{"skill_name": "str"}',
+        ),
+        (
+            "WriteSkillFileTool",
+            "write_skill_file",
+            "Write content to a file within a skill directory. Creates parent "
+            "directories if they do not exist.",
+            '{"skill_name": "str", "file_path": "str", "content": "str"}',
+        ),
+    )
+    injected = [
+        ToolConfig(
+            class_name=class_name,
+            name=name,
+            description=description,
+            inputs=inputs,
+            output_type="string",
+            params=params,
+            source="builtin",
+            usage="builtin",
+            metadata=skill_context,
+        )
+        for class_name, name, description, inputs in definitions
+        if name not in existing_names
+    ]
+    return [*tools, *injected]
 
 
 # ============ Message Processing Functions ============
