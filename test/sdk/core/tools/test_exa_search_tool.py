@@ -115,9 +115,9 @@ def test_forward_with_results(exa_search_tool, mock_observer):
     keys = first_result.keys()
     print(f"\nAvailable keys in result: {keys}")
 
-    # Modified assertion to check if text field exists rather than url
     assert "text" in first_result
     assert first_result["text"].startswith("This is test text content")
+    assert first_result["url"] == "https://example.com/0"
 
     # If there's a cite_index field, verify it as well
     if "cite_index" in first_result:

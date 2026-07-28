@@ -119,6 +119,7 @@ def test_forward_with_results(tavily_search_tool, mock_observer):
     # Check if text field exists
     assert "text" in first_result
     assert first_result["text"].startswith("This is test content")
+    assert first_result["url"] == "https://example.com/0"
 
     # If there's a cite_index field, verify it as well
     if "cite_index" in first_result:

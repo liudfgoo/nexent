@@ -66,7 +66,7 @@ class SearchResultTextMessage:
     Unified search result message class, containing all fields for search and FinalAnswerFormat tools.
     """
 
-    def __init__(self, title: str, url: str, text: str, published_date: Optional[str] = None,
+    def __init__(self, title: str, url: Optional[str], text: str, published_date: Optional[str] = None,
                  source_type: Optional[str] = None, filename: Optional[str] = None, score: Optional[str] = None,
                  score_details: Optional[Dict[str, Any]] = None, cite_index: Optional[int] = None,
                  search_type: Optional[str] = None, tool_sign: Optional[str] = None):
@@ -91,4 +91,8 @@ class SearchResultTextMessage:
 
     def to_model_dict(self) -> Dict[str, Any]:
         """Format for input to the large model summary."""
-        return {"title": self.title, "text": self.text, "index": f"{self.tool_sign}{self.cite_index}"}
+        result = {"title": self.title, "text": self.text, "index": f"{self.tool_sign}{self.cite_index}"}
+        if self.source_type == "url":
+            url = self.url.strip() if isinstance(self.url, str) else self.url
+            result["url"] = url or None
+        return result
