@@ -850,6 +850,38 @@ def test_create_local_tool_success(nexent_agent_instance):
 
     mock_tool_class.assert_called_once_with(param1="value1", param2=42)
     assert result == mock_tool_instance
+    assert result.description == "desc"
+
+
+def test_create_local_tool_keeps_default_description_for_empty_override(nexent_agent_instance):
+    """An empty ToolConfig override must preserve the tool class default."""
+    class DummyTool:
+        name = "default_name"
+        description = "default description"
+
+        def __init__(self):
+            self.inputs = {}
+            self.output_type = "string"
+
+    tool_config = ToolConfig(
+        class_name="DummyTool",
+        name="",
+        description="",
+        params={},
+        source="local",
+    )
+    original_value = nexent_agent.__dict__.get("DummyTool")
+    nexent_agent.__dict__["DummyTool"] = DummyTool
+
+    try:
+        result = nexent_agent_instance.create_local_tool(tool_config)
+    finally:
+        if original_value is not None:
+            nexent_agent.__dict__["DummyTool"] = original_value
+        else:
+            del nexent_agent.__dict__["DummyTool"]
+
+    assert result.description == "default description"
 
 
 def test_create_local_tool_analyze_text_file_tool(nexent_agent_instance):

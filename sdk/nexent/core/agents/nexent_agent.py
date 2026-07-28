@@ -311,11 +311,13 @@ class NexentAgent:
                 tools_obj = tool_class(**params)
                 if hasattr(tools_obj, 'observer'):
                     tools_obj.observer = self.observer
-            # Apply ToolConfig inputs/output_type to the tool instance so that
+            # Apply ToolConfig schema overrides to the tool instance so that
             # smolagents can render correct parameter signatures in the system
-            # prompt.  Without this, tools whose forward() is wrapped by
+            # prompt. Without this, tools whose forward() is wrapped by
             # decorators (e.g. load_object) lose introspectable signatures and
             # smolagents falls back to "Accepts input: None".
+            if tool_config.description:
+                tools_obj.description = tool_config.description
             if tool_config.inputs and hasattr(tools_obj, 'inputs'):
                 import json as _json
                 parsed = tool_config.inputs
