@@ -71,6 +71,11 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+try:
+    from benchmark_paths import ARTIFACT_ROOT
+except ImportError:  # Package import in tests.
+    from .benchmark_paths import ARTIFACT_ROOT
+
 # Load environment variables
 load_dotenv()
 load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
@@ -178,7 +183,7 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
         from experiment_manifest import manifest_path
 
         artifact_path = manifest_path(
-            Path(__file__).parent / "artifacts" / "manifests",
+            ARTIFACT_ROOT / "manifests",
             run_name,
         )
         if artifact_path.exists():
@@ -262,7 +267,7 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
             )
             manifest_path = write_manifest_exclusive(
                 manifest,
-                Path(__file__).parent / "artifacts" / "manifests",
+                ARTIFACT_ROOT / "manifests",
             )
             print(f"\n  Resolved manifest: {manifest_path}")
         

@@ -3,7 +3,9 @@
 
 Usage:
     python upload_gaia_files.py
-    python upload_gaia_files.py --dataset-dir datasets/gaia_level1 --prefix gaia
+    python upload_gaia_files.py \
+        --dataset-dir /home/feiran/nexent-data/benchmark/datasets/gaia_level1 \
+        --prefix gaia
 """
 
 import argparse
@@ -12,6 +14,11 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+try:
+    from .benchmark_paths import DATASET_ROOT
+except ImportError:
+    from benchmark_paths import DATASET_ROOT
 
 load_dotenv()
 load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
@@ -92,7 +99,7 @@ def main():
     parser.add_argument(
         "--dataset-dir",
         type=str,
-        default=str(Path(__file__).parent / "datasets" / "gaia_level1"),
+        default=str(DATASET_ROOT / "gaia_level1"),
         help="Directory containing GAIA attachment files",
     )
     parser.add_argument(

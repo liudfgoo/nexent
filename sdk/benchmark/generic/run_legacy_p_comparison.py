@@ -17,6 +17,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 try:
+    from .benchmark_paths import ARTIFACT_ROOT
     from .run_context_manager_comparison import (
         _primary_evaluator,
         aggregate_provider_cache,
@@ -27,6 +28,7 @@ try:
         preflight,
     )
 except ImportError:
+    from benchmark_paths import ARTIFACT_ROOT
     from run_context_manager_comparison import (
         _primary_evaluator,
         aggregate_provider_cache,
@@ -40,7 +42,6 @@ except ImportError:
 
 GENERIC_DIR = Path(__file__).resolve().parent
 REPO_ROOT = GENERIC_DIR.parents[2]
-ARTIFACT_ROOT = GENERIC_DIR / "artifacts"
 CONTROLLED_RUNNER_ARGS = {
     "--dataset",
     "--run-name",
@@ -92,6 +93,8 @@ class ArmSpec:
 
     @property
     def manifest_dir(self) -> Path:
+        if self.repo_root.resolve() == REPO_ROOT.resolve():
+            return ARTIFACT_ROOT / "manifests"
         return self.repo_root / "sdk/benchmark/generic/artifacts/manifests"
 
 

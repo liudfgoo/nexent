@@ -18,9 +18,19 @@ generic/
 ├── configs/                  # Agent 配置文件
 │   ├── agent_7_test.yaml
 │   └── gsm8k_solver_assistant.yaml
-└── datasets/                 # 数据集
-    └── gsm8k_sample_10.jsonl
+└── datasets/                 # 仅保留已提交的数据加载代码
+    └── gsm8k_loader.py
 ```
+
+JSONL、GAIA 附件和运行产物不放在 Git 工作区，默认使用：
+
+```text
+/home/feiran/nexent-data/benchmark/
+├── datasets/
+└── artifacts/
+```
+
+可通过 `NEXENT_BENCHMARK_DATA_ROOT` 覆盖该根目录。
 
 ## 快速开始
 

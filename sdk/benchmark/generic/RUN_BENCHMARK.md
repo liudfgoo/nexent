@@ -610,7 +610,7 @@ backend/.venv/bin/python sdk/benchmark/generic/run_integrity.py \
   --dataset gaia-level1-reasoning \
   --run-name YOUR_RUN_NAME \
   --evaluators gaia_exact_match \
-  --manifest sdk/benchmark/generic/artifacts/manifests/YOUR_RUN_NAME.manifest.json
+  --manifest /home/feiran/nexent-data/benchmark/artifacts/manifests/YOUR_RUN_NAME.manifest.json
 ```
 
 返回码 `0` 表示完整，`1` 表示检查发现缺失或不一致，`2` 表示连接、认证或输入问题。

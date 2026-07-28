@@ -17,11 +17,14 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
+try:
+    from .benchmark_paths import ARTIFACT_ROOT
+except ImportError:
+    from benchmark_paths import ARTIFACT_ROOT
 
 GENERIC_DIR = Path(__file__).resolve().parent
 REPO_ROOT = GENERIC_DIR.parents[2]
 RUNNER = GENERIC_DIR / "run_benchmark.py"
-ARTIFACT_ROOT = GENERIC_DIR / "artifacts"
 CONTROLLED_RUNNER_ARGS = {
     "--dataset",
     "--run-name",

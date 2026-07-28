@@ -26,10 +26,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+try:
+    from .benchmark_paths import DATASET_ROOT
+except ImportError:
+    from benchmark_paths import DATASET_ROOT
+
 load_dotenv()
 load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
 
-DATASET_DIR = Path(__file__).parent / "datasets" / "gaia_level1"
+DATASET_DIR = DATASET_ROOT / "gaia_level1"
 
 SUBSET_FILES = {
     "reasoning": "gaia_level1_reasoning.jsonl",

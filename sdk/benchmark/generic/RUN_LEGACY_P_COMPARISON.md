@@ -78,7 +78,8 @@ backend/.venv/bin/python \
     --temperature 0
 ```
 
-Reports are written under `artifacts/legacy_p_comparisons/`, separate from the
+Reports are written under
+`/home/feiran/nexent-data/benchmark/artifacts/legacy_p_comparisons/`, separate from the
 existing P/C reports. The paired matrix uses:
 
 - `PP`: both arms pass
