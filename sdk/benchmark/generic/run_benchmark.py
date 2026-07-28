@@ -98,6 +98,32 @@ def load_parity_snapshot(snapshot_path: str) -> dict:
         return yaml.safe_load(handle)
 
 
+def select_dataset_items(
+    items: list,
+    *,
+    item_limit: int | None = None,
+    item_ids: list[str] | None = None,
+) -> list:
+    """Select a deterministic dataset subset and reject unresolved item IDs."""
+    if item_limit is not None and item_ids:
+        raise ValueError("--item-limit cannot be combined with --item-id")
+    if not item_ids:
+        return items[:item_limit] if item_limit is not None else list(items)
+
+    requested = [str(item_id) for item_id in item_ids]
+    if len(requested) != len(set(requested)):
+        raise ValueError("--item-id contains duplicate values")
+    requested_set = set(requested)
+    selected = [item for item in items if str(item.id) in requested_set]
+    resolved = {str(item.id) for item in selected}
+    missing = sorted(requested_set - resolved)
+    if missing:
+        raise ValueError(
+            "Requested dataset item IDs were not found: " + ", ".join(missing)
+        )
+    return selected
+
+
 def upload_jsonl(dataset_name: str, jsonl_path: str,
                  input_key: str = "question", output_key: str = "answer") -> int:
     """Upload a JSONL file as a Langfuse dataset."""
@@ -144,13 +170,19 @@ def upload_jsonl(dataset_name: str, jsonl_path: str,
 def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                    run_name: str, max_concurrency: int = 1,
                    manifest_context: dict | None = None,
-                   item_limit: int | None = None):
+                   item_limit: int | None = None,
+                   item_ids: list[str] | None = None,
+                   exa_cache_controller=None):
     """Run experiment using Langfuse v2 SDK: trace → score → link pattern."""
     from langfuse import Langfuse
     lf = Langfuse()
     
     dataset = lf.get_dataset(dataset_name)
-    items = dataset.items[:item_limit] if item_limit is not None else dataset.items
+    items = select_dataset_items(
+        dataset.items,
+        item_limit=item_limit,
+        item_ids=item_ids,
+    )
     n = len(items)
     print(f"  {n} items loaded")
     
@@ -444,6 +476,11 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
         run_name=run_name,
         dataset_name=dataset_name,
         item_evidence=item_web_evidence,
+        exa_cache=(
+            exa_cache_controller.snapshot()
+            if exa_cache_controller is not None
+            else None
+        ),
     )
     web_aggregate = aggregate_web_evidence(item_web_evidence)
     
@@ -672,6 +709,25 @@ def main():
                         help="Max parallel agent runs (default: 1)")
     parser.add_argument("--item-limit", type=positive_int,
                         help="Run only the first N dataset items (for deterministic smoke tests)")
+    parser.add_argument(
+        "--item-id",
+        action="append",
+        default=[],
+        help="Run one exact Langfuse dataset item ID; repeat for multiple items",
+    )
+    parser.add_argument(
+        "--exa-cache-mode",
+        choices=["off", "record", "replay"],
+        default="off",
+        help=(
+            "Benchmark-only Exa cache: record reuses hits and records misses; "
+            "replay fails on every miss without a live fallback"
+        ),
+    )
+    parser.add_argument(
+        "--exa-cache-path",
+        help="JSON cache path required when --exa-cache-mode is not off",
+    )
     parser.add_argument("--run-name", type=str,
                         help="Custom run name (default: auto-generated)")
     
@@ -688,6 +744,12 @@ def main():
                         help="List available evaluators and exit")
     
     args = parser.parse_args()
+    if args.item_limit is not None and args.item_id:
+        parser.error("--item-limit cannot be combined with --item-id")
+    if args.exa_cache_mode != "off" and not args.exa_cache_path:
+        parser.error("--exa-cache-path is required when Exa cache is enabled")
+    if args.exa_cache_mode == "off" and args.exa_cache_path:
+        parser.error("--exa-cache-path requires --exa-cache-mode record or replay")
     
     # List evaluators
     if args.list_evaluators:
@@ -819,6 +881,18 @@ def main():
         version_no=int(agent_cfg.get("version_no", 0) or 0),
         local_skills_dir=skills_path,
     )
+    exa_cache_controller = None
+    if args.exa_cache_mode != "off":
+        from exa_replay import install_exa_record_replay
+
+        exa_cache_controller = install_exa_record_replay(
+            args.exa_cache_mode,
+            args.exa_cache_path,
+        )
+        print(
+            f"Exa cache: mode={args.exa_cache_mode}, "
+            f"path={Path(args.exa_cache_path).resolve()}"
+        )
 
     # Run new experiment
     from task_adapter import make_nexent_task
@@ -898,6 +972,8 @@ def main():
         run_name=run_name,
         max_concurrency=args.max_concurrency,
         item_limit=args.item_limit,
+        item_ids=args.item_id,
+        exa_cache_controller=exa_cache_controller,
         manifest_context={
             "repo_root": Path(__file__).resolve().parents[3],
             "lifecycle_mode": "isolated-item",
@@ -912,6 +988,7 @@ def main():
                 "owner": "context_items",
                 "algorithm": "item_representation",
                 "web_evidence_contract_version": 1,
+                "exa_cache_mode": args.exa_cache_mode,
             },
             "started_at": datetime.now(timezone.utc).isoformat(),
             "budget_profile": budget_profile,

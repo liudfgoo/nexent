@@ -10,6 +10,8 @@
 - 重新评分已有结果（不调用 LLM）
 - 上传数据集 + 运行一体化
 - 记录 Web Search → Fetch 证据与工具成本统计
+- Exa 结果 record/replay
+- 只对已有 run 的失败题做小范围重复实验
 
 ## 命令行参数
 
@@ -132,8 +134,14 @@ profile，manifest 会记录 `explicit_unclassified`。
 | 参数                  | 说明           |
 | ------------------- | ------------ |
 | `--max-concurrency` | 最大并行数（默认 1）  |
+| `--item-id` | 精确选择一个 DatasetItem ID；可重复传入 |
+| `--exa-cache-mode` | `off`、`record` 或严格 `replay` |
+| `--exa-cache-path` | record/replay 使用的 JSON 文件 |
 | `--run-name`        | 自定义运行名称      |
 | `--dry-run`         | 仅上传数据集，不运行实验 |
+
+Web evidence、Exa replay、失败题重复与 GAIA 最终答案诊断的完整使用方法见
+[`WEB_BENCHMARK_OPTIMIZATIONS.md`](./WEB_BENCHMARK_OPTIMIZATIONS.md)。
 
 ### 重新评分模式
 

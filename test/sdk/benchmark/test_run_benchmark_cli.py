@@ -7,6 +7,7 @@ from sdk.benchmark.generic.run_benchmark import (
     load_agent_config,
     non_negative_int,
     positive_int,
+    select_dataset_items,
 )
 
 
@@ -76,3 +77,22 @@ def test_load_agent_config_rejects_non_strict_environment_reference(
 
     with pytest.raises(ValueError, match="must be the only key"):
         load_agent_config(str(config_path))
+
+
+def test_select_dataset_items_uses_exact_ids_in_dataset_order():
+    items = [
+        type("Item", (), {"id": "a"})(),
+        type("Item", (), {"id": "b"})(),
+        type("Item", (), {"id": "c"})(),
+    ]
+
+    selected = select_dataset_items(items, item_ids=["c", "a"])
+
+    assert [item.id for item in selected] == ["a", "c"]
+
+
+def test_select_dataset_items_rejects_missing_ids():
+    items = [type("Item", (), {"id": "a"})()]
+
+    with pytest.raises(ValueError, match="not found"):
+        select_dataset_items(items, item_ids=["missing"])
