@@ -177,6 +177,7 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
     agg_wall_clock_seconds = 0.0
     agg_peak_context_tokens = 0
     agg_net_token_saving = 0
+    item_web_evidence = {}
     manifest = None
     manifest_path = None
     dataset_item_ids = [str(item.id) for item in items]
@@ -192,6 +193,16 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
         if artifact_path.exists():
             raise FileExistsError(
                 f"Run '{run_name}' already has a manifest: {artifact_path}"
+            )
+        from web_evidence import web_evidence_artifact_path
+
+        web_artifact_path = web_evidence_artifact_path(
+            ARTIFACT_ROOT / "web_evidence",
+            run_name,
+        )
+        if web_artifact_path.exists():
+            raise FileExistsError(
+                f"Run '{run_name}' already has web evidence: {web_artifact_path}"
             )
 
     for i, item in enumerate(items):
@@ -284,10 +295,12 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                 "agent_config": output.get("agent_config", {}),
                 "compression": output.get("compression", {}),
                 "provider_cache": output.get("provider_cache", {}),
+                "web_evidence": output.get("web_evidence", {}),
                 "manifest_hash": manifest.get("manifest_hash") if manifest else None,
                 "manifest_path": str(manifest_path) if manifest_path else None,
             },
         )
+        item_web_evidence[str(item.id)] = output.get("web_evidence", {})
         
         steps = output.get("steps", [])
         for step in steps:
@@ -314,6 +327,7 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                         "code": step.get("code", ""),
                         "tool_call": step.get("tool_call", ""),
                         "observation": step.get("observation", ""),
+                        "web_events": step.get("web_events", []),
                     },
                     usage_details={
                         "input": token_usage.get("api_input_tokens", 0) or 0,
@@ -419,6 +433,19 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
         item.link(trace, run_name)
     
     lf.flush()
+
+    from web_evidence import (
+        aggregate_web_evidence,
+        write_web_evidence_artifact,
+    )
+
+    web_artifact_path = write_web_evidence_artifact(
+        output_dir=ARTIFACT_ROOT / "web_evidence",
+        run_name=run_name,
+        dataset_name=dataset_name,
+        item_evidence=item_web_evidence,
+    )
+    web_aggregate = aggregate_web_evidence(item_web_evidence)
     
     print(f"\n{'='*60}")
     print(f"Experiment complete: {run_name}")
@@ -454,6 +481,19 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
         print(f"    Avg per item:        {agg_wall_clock_seconds / n:.1f}s")
     print(f"  Peak context:          {agg_peak_context_tokens} tokens")
     print(f"  Net token saving:      {agg_net_token_saving} tokens")
+    print("  Web retrieval:")
+    print(f"    Exa search calls:    {web_aggregate['exa_search_calls']}")
+    print(f"    Tavily extract calls:{web_aggregate['tavily_extract_calls']}")
+    print(f"    Terminal fetch calls:{web_aggregate['terminal_fetch_calls']}")
+    print(
+        "    Search after URL:    "
+        f"{web_aggregate['search_after_url_discovery']}"
+    )
+    print(
+        "    URL found/no fetch:  "
+        f"{web_aggregate['items_with_discovered_url_but_no_fetch']} items"
+    )
+    print(f"    Artifact:            {web_artifact_path}")
     print(f"\nView in Langfuse: {os.environ.get('LANGFUSE_HOST', '')}/dataset/{dataset.id}")
     print(f"{'='*60}")
 
@@ -871,6 +911,7 @@ def main():
             "observation_policy": {
                 "owner": "context_items",
                 "algorithm": "item_representation",
+                "web_evidence_contract_version": 1,
             },
             "started_at": datetime.now(timezone.utc).isoformat(),
             "budget_profile": budget_profile,

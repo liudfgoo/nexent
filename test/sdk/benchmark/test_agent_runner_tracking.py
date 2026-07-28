@@ -84,6 +84,40 @@ async def test_run_agent_with_tracking_builds_model_step_and_metrics(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_run_agent_with_tracking_preserves_web_observer_metadata(monkeypatch):
+    async def fake_agent_run(_):
+        yield json.dumps({"type": "step_count", "content": "1"})
+        yield json.dumps({
+            "type": "tool",
+            "content": "",
+            "tool_name": "exa_search",
+            "tool_arguments": {"query": "GAIA"},
+        })
+        yield json.dumps({
+            "type": "search_content",
+            "content": '[{"url":"https://example.com"}]',
+        })
+        yield json.dumps({"type": "final_answer", "content": "FINAL ANSWER: x"})
+
+    monkeypatch.setattr(agent_runner, "agent_run", fake_agent_run)
+    result = await agent_runner.run_agent_with_tracking(
+        SimpleNamespace(query="question")
+    )
+
+    assert result.steps[0]["web_events"] == [
+        {
+            "event_type": "tool_call",
+            "tool_name": "exa_search",
+            "tool_arguments": {"query": "GAIA"},
+        },
+        {
+            "event_type": "search_content",
+            "content": '[{"url":"https://example.com"}]',
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_passthrough_does_not_report_compression_savings(monkeypatch):
     async def fake_agent_run(_):
         yield json.dumps({"type": "step_count", "content": "1"})

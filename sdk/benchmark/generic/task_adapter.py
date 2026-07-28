@@ -203,6 +203,15 @@ def make_nexent_task(
             resource_support=resource_support,
             intentional_empty_resources=intentional_empty_resources,
         )
+        try:
+            from web_evidence import build_web_evidence
+        except ImportError:
+            from .web_evidence import build_web_evidence
+        web_evidence = build_web_evidence(
+            result.steps,
+            task_query=question,
+            answer_candidate=result.final_answer,
+        )
 
         return {
             "final_answer": result.final_answer,
@@ -213,6 +222,7 @@ def make_nexent_task(
             "errors": result.errors,
             "message_type_count": result.message_type_count,
             "steps": result.steps,
+            "web_evidence": web_evidence,
             "system_prompt": system_prompt_text,
             "parity_snapshot": parity_snapshot,
             "model_config": {

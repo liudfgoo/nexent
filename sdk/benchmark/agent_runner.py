@@ -86,6 +86,8 @@ TRACKED_MESSAGE_TYPES = {
     "final_answer",            # final answer
     "error",                   # error
     "token_count",             # per-step token usage stats
+    "tool",                    # real tool name and arguments
+    "search_content",          # detailed search result records
 }
 
 
@@ -573,6 +575,17 @@ def process_agent_message(chunk: str) -> tuple[str, str]:
         return "", chunk
 
 
+def _parse_agent_message(chunk: str) -> tuple[str, object, dict]:
+    """Parse a stream chunk while preserving optional observer metadata."""
+    try:
+        data = json.loads(chunk)
+        if not isinstance(data, dict):
+            return "", chunk, {}
+        return data.get("type", ""), data.get("content", ""), data
+    except json.JSONDecodeError:
+        return "", chunk, {}
+
+
 class AgentRunResult:
     """Agent run result wrapper"""
     def __init__(self):
@@ -672,7 +685,7 @@ async def run_agent_with_tracking(
         if not chunk:
             continue
 
-        msg_type, msg_content = process_agent_message(chunk)
+        msg_type, msg_content, msg_data = _parse_agent_message(chunk)
 
         if debug:
             print(f"[DEBUG] Type={msg_type}, Content Length={len(msg_content)}",
@@ -693,6 +706,7 @@ async def run_agent_with_tracking(
                     "code": "",
                     "tool_call": "",
                     "observation": "",
+                    "web_events": [],
                     "token_usage": None,
                 }
                 result.steps.append(current_step)
@@ -709,6 +723,17 @@ async def run_agent_with_tracking(
             current_step["tool_call"] += msg_content
         elif msg_type == "execution_logs" and current_step is not None:
             current_step["observation"] += msg_content
+        elif msg_type == "tool" and current_step is not None:
+            current_step["web_events"].append({
+                "event_type": "tool_call",
+                "tool_name": msg_data.get("tool_name", ""),
+                "tool_arguments": msg_data.get("tool_arguments", {}),
+            })
+        elif msg_type == "search_content" and current_step is not None:
+            current_step["web_events"].append({
+                "event_type": "search_content",
+                "content": msg_content,
+            })
 
         # Handle final answer
         if msg_type == "final_answer":
@@ -723,6 +748,7 @@ async def run_agent_with_tracking(
                 "code": "",
                 "tool_call": "",
                 "observation": "",
+                "web_events": [],
                 "token_usage": None,
             })
             if on_final_answer:
