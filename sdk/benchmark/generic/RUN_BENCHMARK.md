@@ -43,6 +43,8 @@
 | `em`             | exact\_match 的别名 | 同上           |
 | `f1`             | Token 级 F1 分数    | 开放式 QA       |
 | `keyword_match`  | 关键词命中率           | 需要包含特定关键词的回答 |
+| `gaia_exact_match` | GAIA 标准化最终答案精确匹配 | GAIA 正式准确率 |
+| `gaia_final_answer` | 最终答案格式、候选与提交损失诊断 | 放在 `gaia_exact_match` 之后 |
 
 ### Agent 执行参数（覆盖 YAML）
 

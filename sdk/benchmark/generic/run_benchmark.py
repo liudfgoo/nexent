@@ -344,6 +344,7 @@ def run_experiment(dataset_name: str, task_fn, evaluator_fns: list,
                         v_ = r.get("value", 0.0)
                         trace.score(name=n_, value=v_)
                         item_scores[n_] = v_
+                        total_scores.setdefault(n_, []).append(v_)
                     continue
                 else:
                     name, value = "unknown", 0.0

@@ -13,6 +13,7 @@ from typing import Callable, Dict, List
 
 from .exact_match import exact_match_evaluator
 from .gaia_exact_match import gaia_exact_match_evaluator
+from .gaia_final_answer import gaia_final_answer_evaluator
 from .em_f1 import em_evaluator, f1_evaluator
 from .keyword_match import keyword_match_evaluator
 from .numeric_answer import numeric_answer_evaluator
@@ -21,6 +22,7 @@ from .numeric_answer import numeric_answer_evaluator
 EVALUATOR_REGISTRY: Dict[str, Callable] = {
     "exact_match": exact_match_evaluator,
     "gaia_exact_match": gaia_exact_match_evaluator,
+    "gaia_final_answer": gaia_final_answer_evaluator,
     "em": em_evaluator,
     "f1": f1_evaluator,
     "keyword_match": keyword_match_evaluator,
