@@ -99,7 +99,19 @@ def test_manifest_redacts_secrets_and_endpoint_credentials(monkeypatch, tmp_path
             "model_name": "model",
             "url": "https://user:password@example.com/v1?api_key=secret",
         },
-        tools=[{"name": "tool", "api_key": "secret"}],
+        tools=[{
+            "name": "tool",
+            "params": {
+                "exa_api_key": "secret-exa",
+                "tavily_api_key": "secret-tavily",
+                "ssh_password": "secret-password",
+                "access_token": "secret-token",
+                "authorization_header": "secret-authorization",
+                "headers": {"X-Secret": "secret-header"},
+                "cookie": "secret-cookie",
+                "max_tokens": 4096,
+            },
+        }],
         system_prompt="system",
         agent_config={"name": "agent"},
         evaluator_names=["exact_match"],
@@ -108,6 +120,19 @@ def test_manifest_redacts_secrets_and_endpoint_credentials(monkeypatch, tmp_path
 
     assert manifest["model_endpoint"] == "https://example.com/v1"
     assert "secret" not in str(manifest)
+    assert manifest["tool_schema_hash"] == sha256_value([{
+        "name": "tool",
+        "params": {
+            "exa_api_key": "[REDACTED]",
+            "tavily_api_key": "[REDACTED]",
+            "ssh_password": "[REDACTED]",
+            "access_token": "[REDACTED]",
+            "authorization_header": "[REDACTED]",
+            "headers": "[REDACTED]",
+            "cookie": "[REDACTED]",
+            "max_tokens": 4096,
+        },
+    }])
 
 
 def test_jsonable_stops_cyclic_runtime_objects():

@@ -61,6 +61,11 @@ def test_canonical_tool_schema_excludes_metadata_and_secrets():
         "name": "search",
         "description": "Search",
         "inputs": "{}",
+        "params": {
+            "exa_api_key": "secret-exa",
+            "tavily_api_key": "secret-tavily",
+            "terminal_password": "secret-password",
+        },
         "metadata": {"api_key": "secret"},
     }
 
@@ -68,6 +73,11 @@ def test_canonical_tool_schema_excludes_metadata_and_secrets():
 
     assert "metadata" not in schema
     assert "secret" not in str(schema)
+    assert schema["params"] == {
+        "exa_api_key": "[REDACTED]",
+        "tavily_api_key": "[REDACTED]",
+        "terminal_password": "[REDACTED]",
+    }
 
 
 def test_diff_reports_prompt_item_and_tool_failures_separately():

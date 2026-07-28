@@ -14,17 +14,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+try:
+    from secret_refs import is_sensitive_key
+except ImportError:  # Package import in tests.
+    from .secret_refs import is_sensitive_key
 
 MANIFEST_SCHEMA_VERSION = 3
-SENSITIVE_KEYS = {
-    "api_key",
-    "authorization",
-    "cookie",
-    "headers",
-    "password",
-    "secret",
-    "token",
-}
 TOOL_SCHEMA_FIELDS = (
     "class_name",
     "name",
@@ -326,7 +321,7 @@ def _jsonable(
         result = {
             str(key): (
                 "[REDACTED]"
-                if str(key).lower() in SENSITIVE_KEYS
+                if is_sensitive_key(key)
                 else _jsonable(item, _seen=seen, _depth=next_depth)
             )
             for key, item in value.items()
@@ -354,7 +349,7 @@ def _jsonable(
             key: item
             for key, item in vars(value).items()
             if not key.startswith("_")
-            and key.lower() not in SENSITIVE_KEYS
+            and not is_sensitive_key(key)
             and key != "metadata"
         }
         result = _jsonable(public, _seen=seen, _depth=next_depth)

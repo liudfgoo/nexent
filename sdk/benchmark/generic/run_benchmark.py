@@ -73,8 +73,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
     from benchmark_paths import ARTIFACT_ROOT
+    from secret_refs import resolve_env_references
 except ImportError:  # Package import in tests.
     from .benchmark_paths import ARTIFACT_ROOT
+    from .secret_refs import resolve_env_references
 
 # Load environment variables
 load_dotenv()
@@ -82,9 +84,10 @@ load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
 
 
 def load_agent_config(config_path: str) -> dict:
-    """Load agent configuration from YAML file."""
+    """Load YAML agent configuration and resolve strict environment references."""
     with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    return resolve_env_references(config or {})
 
 
 def load_parity_snapshot(snapshot_path: str) -> dict:

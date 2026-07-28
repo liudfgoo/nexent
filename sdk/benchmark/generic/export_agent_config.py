@@ -32,6 +32,11 @@ import psycopg2
 import yaml
 from dotenv import load_dotenv
 
+try:
+    from secret_refs import externalize_sensitive_values
+except ImportError:  # Package import in tests.
+    from .secret_refs import externalize_sensitive_values
+
 # Load environment variables
 load_dotenv()
 
@@ -125,10 +130,16 @@ def export_agent_config(agent_id: int = None, agent_name: str = None,
         """, (agent_id, target_version))
         
         tools = []
+        required_secret_env_vars = set()
         for row in cursor.fetchall():
             (tool_name, tool_class, tool_source, tool_category,
              tool_desc, tool_inputs, tool_output_type,
              tool_params, enabled) = row
+            safe_tool_params, tool_secret_env_vars = externalize_sensitive_values(
+                tool_params or {},
+                tool_name=tool_name,
+            )
+            required_secret_env_vars.update(tool_secret_env_vars)
             tools.append({
                 "tool_name": tool_name,
                 "tool_class": tool_class,
@@ -137,7 +148,7 @@ def export_agent_config(agent_id: int = None, agent_name: str = None,
                 "tool_description": tool_desc,
                 "tool_inputs": tool_inputs,
                 "tool_output_type": tool_output_type,
-                "tool_params": tool_params or {},
+                "tool_params": safe_tool_params,
                 "enabled": enabled
             })
         
@@ -220,6 +231,11 @@ def export_agent_config(agent_id: int = None, agent_name: str = None,
         print(f"  - Tools: {len(tools)}")
         print(f"  - Sub-agents: {len(sub_agents)}")
         print(f"  - Skills: {len(skills)}")
+        if required_secret_env_vars:
+            print(
+                "  - Required secret environment variables: "
+                + ", ".join(sorted(required_secret_env_vars))
+            )
         
         return output_file
         
