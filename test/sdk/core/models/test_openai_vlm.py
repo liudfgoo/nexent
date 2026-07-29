@@ -89,6 +89,18 @@ with patch.dict("sys.modules", module_mocks):
         return model
 
 
+def test_default_temperature_is_zero():
+    """VLM requests should be deterministic by default."""
+    model = ImportedOpenAIVLModel(
+        observer=MagicMock(),
+        model_id="dummy-model",
+        api_key="dummy-key",
+        api_base="https://example.test",
+    )
+
+    assert model.temperature == 0.0
+
+
 # ---------------------------------------------------------------------------
 # Tests for check_connectivity
 # ---------------------------------------------------------------------------

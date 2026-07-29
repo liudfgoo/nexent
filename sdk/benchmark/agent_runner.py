@@ -384,6 +384,7 @@ def _build_vlm_model():
     api_url = os.getenv("VLM_API_URL") or os.getenv("LLM_API_URL")
     api_key = os.getenv("VLM_API_KEY") or os.getenv("LLM_API_KEY")
     model_name = os.getenv("VLM_MODEL_NAME") or os.getenv("LLM_MODEL_NAME")
+    temperature = float(os.getenv("VLM_TEMPERATURE", "0"))
     if not all([api_url, api_key, model_name]):
         return None
     from nexent.core.models.openai_vlm import OpenAIVLModel
@@ -392,7 +393,7 @@ def _build_vlm_model():
         model_id=model_name,
         api_base=api_url,
         api_key=api_key,
-        temperature=0.7,
+        temperature=temperature,
         ssl_verify=False,
     )
 
