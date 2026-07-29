@@ -22,6 +22,7 @@ from .list_directory_tool import ListDirectoryTool
 from .terminal_tool import TerminalTool
 from .analyze_text_file_tool import AnalyzeTextFileTool
 from .analyze_image_tool import AnalyzeImageTool
+from .extract_image_text_tool import ExtractImageTextTool
 from .analyze_audio_tool import AnalyzeAudioTool
 from .analyze_video_tool import AnalyzeVideoTool
 from .parallel_executor import ParallelExecutorTool
@@ -57,6 +58,7 @@ __all__ = [
     "TerminalTool",
     "AnalyzeTextFileTool",
     "AnalyzeImageTool",
+    "ExtractImageTextTool",
     "AnalyzeAudioTool",
     "AnalyzeVideoTool",
     "StoreMemoryTool",

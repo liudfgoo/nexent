@@ -142,13 +142,14 @@ class OpenAIModel(OpenAIServerModel):
                  _token_tracker=None, safe_input_budget_snapshot: Optional[SafeInputBudgetSnapshot] = None,
                  **kwargs, ) -> ChatMessage:
         _monitoring_operation.set("chat_completion")
+        effective_temperature = kwargs.pop("temperature", self.temperature)
 
         if _token_tracker is None:
             trusted_budget_snapshot = (
                 safe_input_budget_snapshot or self.safe_input_budget_snapshot
             )
             invocation_parameters = {
-                "temperature": self.temperature,
+                "temperature": effective_temperature,
                 "top_p": self.top_p,
                 **{k: v for k, v in kwargs.items() if isinstance(v, (str, int, float, bool))},
             }
@@ -180,6 +181,7 @@ class OpenAIModel(OpenAIServerModel):
                     tools_to_call_from=tools_to_call_from,
                     _token_tracker=token_tracker,
                     safe_input_budget_snapshot=safe_input_budget_snapshot,
+                    temperature=effective_temperature,
                     **kwargs,
                 )
 
@@ -210,7 +212,7 @@ class OpenAIModel(OpenAIServerModel):
             self._monitoring.add_span_event("completion_started")
             self._monitoring.set_span_attributes(
                 model_id=self.model_id,
-                temperature=self.temperature,
+                temperature=effective_temperature,
                 top_p=self.top_p,
                 message_count=len(
                     normalized_messages) if normalized_messages else 0,
@@ -228,7 +230,7 @@ class OpenAIModel(OpenAIServerModel):
             messages=messages_for_completion, stop_sequences=stop_sequences,
             response_format=response_format, tools_to_call_from=tools_to_call_from, model=self.model_id,
             custom_role_conversions=self.custom_role_conversions, convert_images_to_image_urls=True,
-            temperature=self.temperature, top_p=self.top_p,
+            temperature=effective_temperature, top_p=self.top_p,
             flatten_messages_as_text=flatten_messages_as_text, **kwargs,
         )
 

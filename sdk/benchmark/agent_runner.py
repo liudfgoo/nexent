@@ -357,6 +357,7 @@ _METADATA_UNSUPPORTED_TOOLS = {
 _ANALYZE_TOOL_CLASSES = {
     "AnalyzeTextFileTool",
     "AnalyzeImageTool",
+    "ExtractImageTextTool",
     "AnalyzeAudioTool",
     "AnalyzeVideoTool",
 }

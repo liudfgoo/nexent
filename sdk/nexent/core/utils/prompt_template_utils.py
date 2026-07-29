@@ -17,6 +17,10 @@ template_paths = {
         LANGUAGE["ZH"]: 'core/prompts/analyze_image_zh.yaml',
         LANGUAGE["EN"]: 'core/prompts/analyze_image_en.yaml'
     },
+    'extract_image_text': {
+        LANGUAGE["ZH"]: 'core/prompts/extract_image_text_zh.yaml',
+        LANGUAGE["EN"]: 'core/prompts/extract_image_text_en.yaml'
+    },
     'analyze_audio': {
         LANGUAGE["ZH"]: 'core/prompts/analyze_audio_zh.yaml',
         LANGUAGE["EN"]: 'core/prompts/analyze_audio_en.yaml'
@@ -38,6 +42,7 @@ def get_prompt_template(template_type: str, language: str = LANGUAGE["ZH"], **kw
     Args:
         template_type: Template type, supports the following values:
             - 'analyze_image': Analyze image template
+            - 'extract_image_text': Strict image text transcription template
             - 'analyze_audio': Analyze audio template
             - 'analyze_video': Analyze video template
             - 'analyze_file': Analyze file template (for text files)

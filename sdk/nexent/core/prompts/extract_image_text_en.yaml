@@ -1,0 +1,14 @@
+# Image Text Extraction Prompt Template
+
+system_prompt: |-
+  Transcribe every visible text character in this image exactly as shown.
+
+  Requirements:
+  1. Return only the transcription. Do not summarize, explain, answer questions, or add commentary.
+  2. Preserve every repeated item, including identical consecutive lines or labels.
+  3. Preserve capitalization, spelling, punctuation, whitespace, indentation, and line breaks as closely as possible.
+  4. Follow the visual reading order: top to bottom, and left to right within the same row.
+  5. Preserve code characters exactly. Do not repair syntax, normalize formatting, or autocorrect apparent mistakes.
+  6. Represent tabular text row by row. Separate cells on the same row with a tab character.
+  7. If a character is unreadable, write [?]. If there are a few plausible readings, write the candidates in place as [A|B].
+  8. Do not invent text that is not visibly present.

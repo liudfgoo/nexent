@@ -419,6 +419,30 @@ if models_pkg is not None:
 # ---------------------------------------------------------------------------
 
 
+def test_call_supports_per_request_temperature_override(openai_model_instance):
+    """A caller can use deterministic sampling without mutating the shared model."""
+    captured = {}
+
+    def capture_completion_kwargs(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after capturing completion kwargs")
+
+    with patch.object(
+        openai_model_instance,
+        "_prepare_completion_kwargs",
+        side_effect=capture_completion_kwargs,
+    ):
+        with pytest.raises(RuntimeError, match="stop after capturing"):
+            openai_model_instance.__call__(
+                messages=[],
+                _token_tracker=MagicMock(),
+                temperature=0,
+            )
+
+    assert captured["temperature"] == 0
+    assert openai_model_instance.temperature == 0.7
+
+
 def test_check_connectivity_success(openai_model_instance):
     """check_connectivity should return True when no exception is raised."""
     with patch.object(

@@ -61,6 +61,23 @@ class TestGetPromptTemplate:
         # Verify result
         assert result == {"system_prompt": "Test prompt", "user_prompt": "User prompt"}
 
+    @patch('builtins.open', new_callable=mock_open, read_data='system_prompt: "Transcribe exactly."')
+    @patch('yaml.safe_load')
+    def test_get_prompt_template_extract_image_text_en(self, mock_yaml_load, mock_file):
+        """Test strict image text extraction template lookup."""
+        mock_yaml_load.return_value = {"system_prompt": "Transcribe exactly."}
+
+        result = get_prompt_template(
+            template_type="extract_image_text", language="en"
+        )
+
+        assert result == {"system_prompt": "Transcribe exactly."}
+        call_args = mock_file.call_args[0]
+        assert "prompts/extract_image_text_en.yaml" in call_args[0].replace("\\", "/")
+        assert call_args[1] == 'r'
+        assert mock_file.call_args[1]['encoding'] == 'utf-8'
+        mock_yaml_load.assert_called_once()
+
     @pytest.mark.parametrize(
         "template_type,language,expected_file",
         [
