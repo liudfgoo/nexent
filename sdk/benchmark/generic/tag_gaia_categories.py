@@ -162,7 +162,7 @@ def update_traces(lf, dataset_name: str, run_name: str, mapping: dict[str, str],
 
     print(f"\nRun '{run_name}': {len(all_run_items)} run items")
 
-    score_batch = []
+    scores_created = 0
     meta_updated = 0
     unmatched = 0
 
@@ -202,37 +202,26 @@ def update_traces(lf, dataset_name: str, run_name: str, mapping: dict[str, str],
         new_meta = {**existing_meta, "category": category}
         lf.trace(id=trace_id, metadata=new_meta)
 
-        score_batch.append({
-            "id": f"score-cat-{trace_id}",
-            "type": "score-create",
-            "timestamp": "2026-07-20T12:00:00Z",
-            "body": {
-                "id": f"score-cat-{trace_id}",
+        resp = requests.post(
+            f"{host}/api/public/scores",
+            auth=auth,
+            json={
                 "traceId": trace_id,
                 "name": "category",
                 "value": category,
                 "dataType": "CATEGORICAL",
-            }
-        })
+            },
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            scores_created += 1
+        else:
+            print(f"  ERROR creating score for {trace_id}: {resp.status_code} {resp.text[:100]}")
+
         meta_updated += 1
 
     lf.flush()
-
-    if score_batch:
-        resp = requests.post(
-            f"{host}/api/public/ingestion",
-            auth=auth,
-            json={"batch": score_batch},
-            timeout=60,
-        )
-        result = resp.json()
-        successes = len(result.get("successes", []))
-        errors = result.get("errors", [])
-        print(f"  Scores: {successes} created, {len(errors)} errors")
-        if errors:
-            for e in errors[:5]:
-                print(f"    Error: {e}")
-
+    print(f"  Scores: {scores_created} created")
     print(f"  Updated: {meta_updated}, Unmatched: {unmatched}")
     return meta_updated
 
