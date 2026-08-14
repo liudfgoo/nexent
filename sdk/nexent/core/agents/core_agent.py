@@ -747,6 +747,7 @@ Additional Args:
             current_run_start_idx=self._history_step_count,
             tools=self._context_tools(),
         )
+        self._last_context_evidence = final_context.evidence
         get_monitoring_manager().record_final_context_evidence(final_context.evidence, step_number=self.step_number)
         self._emit_history_summary_event()
         self._ensure_context_within_hard_budget(final_context)
@@ -756,7 +757,11 @@ Additional Args:
         # is already the compressed payload, so use the ContextManager's raw
         # memory token count when compression produced one. When compression is
         # disabled, the final input size is the correct zero-savings baseline.
-        uncompressed_tokens = self.context_runtime.token_counts().get("uncompressed")
+        uncompressed_tokens = getattr(
+            final_context.evidence, "effective_raw_token_estimate", 0
+        )
+        if not isinstance(uncompressed_tokens, (int, float)) or uncompressed_tokens <= 0:
+            uncompressed_tokens = self.context_runtime.token_counts().get("uncompressed")
         if uncompressed_tokens:
             self._last_uncompressed_est = uncompressed_tokens
         else:
@@ -1324,6 +1329,7 @@ You have been provided with these additional arguments, that you can access usin
                 "estimated_output_tokens": 0,
             },
             "uncompressed_mem_est_input": 0,
+            "context_compression": {},
             "cache_hit": False,
             "cache_types": [],
         }
@@ -1354,6 +1360,26 @@ You have been provided with these additional arguments, that you can access usin
             self, "_last_uncompressed_est", 0
         )
         self._last_uncompressed_est = 0
+
+        evidence = getattr(self, "_last_context_evidence", None)
+        if evidence is not None:
+            metric["context_compression"] = {
+                "effective_uncompressed_context_tokens": evidence.effective_raw_token_estimate,
+                "post_semantic_context_tokens": evidence.post_semantic_token_estimate,
+                "final_context_tokens": evidence.final_token_estimate,
+                "compression_saved_tokens": evidence.compression_saved_tokens,
+                "compression_stats_complete": evidence.compression_stats_complete,
+                "structural_saved_tokens": evidence.structural_saved_tokens,
+                "structural_compact_count": evidence.structural_compact_count,
+                "semantic_saved_tokens": evidence.semantic_saved_tokens,
+                "semantic_status": evidence.semantic_status,
+                "semantic_covered_turn_count": evidence.semantic_covered_turn_count,
+                "semantic_stats_complete": evidence.semantic_stats_complete,
+                "summary_generation_input_tokens": evidence.summary_generation_input_tokens,
+                "summary_generation_output_tokens": evidence.summary_generation_output_tokens,
+                "summary_persist_status": evidence.summary_persist_status,
+                "fallback_compaction_used": evidence.fallback_compaction_used,
+            }
 
         # 5. Compression ratio
         uncompressed = metric["uncompressed_mem_est_input"]
@@ -1401,6 +1427,7 @@ You have been provided with these additional arguments, that you can access usin
             task=task,
             final_answer_templates=self.prompt_templates,
         )
+        self._last_context_evidence = final_context.evidence
         get_monitoring_manager().record_final_context_evidence(final_context.evidence, step_number=self.step_number)
         self._emit_history_summary_event()
         self._ensure_context_within_hard_budget(final_context)

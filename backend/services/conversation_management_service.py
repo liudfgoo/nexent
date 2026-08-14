@@ -160,6 +160,12 @@ def persist_history_summary_candidate(
         covered_through_message_id=field("covered_through_message_id"),
         previous_summary_unit_id=field("previous_summary_unit_id"),
         trigger=field("trigger"),
+        covered_raw_tokens=field("covered_raw_tokens"),
+        summary_tokens=field("summary_tokens"),
+        covered_turn_count=field("covered_turn_count"),
+        stats_complete=field("stats_complete", False),
+        generation_input_tokens=field("generation_input_tokens", 0),
+        generation_output_tokens=field("generation_output_tokens", 0),
     )
 
 

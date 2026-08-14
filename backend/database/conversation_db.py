@@ -71,12 +71,31 @@ def _parse_history_summary_content(content: Any) -> Optional[Dict[str, Any]]:
     """Return a valid summary payload, or ``None`` for malformed/stale units."""
     try:
         payload = json.loads(content) if isinstance(content, str) else content
-        if not isinstance(payload, dict) or not isinstance(payload.get("summary"), dict):
+        if not isinstance(payload, dict):
+            return None
+        summary = payload.get("summary")
+        if not isinstance(summary, dict) and not (
+            isinstance(summary, str) and summary.strip()
+        ):
             return None
         boundary = payload.get("covered_through_message_id")
         if isinstance(boundary, bool) or int(boundary) <= 0:
             return None
         payload["covered_through_message_id"] = int(boundary)
+        for field in (
+            "covered_raw_tokens", "summary_tokens", "covered_turn_count",
+            "generation_input_tokens", "generation_output_tokens",
+        ):
+            value = payload.get(field)
+            if value is None:
+                continue
+            if isinstance(value, bool) or int(value) < 0:
+                return None
+            payload[field] = int(value)
+        if "stats_complete" in payload and not isinstance(
+            payload["stats_complete"], bool
+        ):
+            return None
         return payload
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -1521,14 +1540,23 @@ def update_message_minio_files(message_id: int, skill_file_uploads: List[Dict[st
 
 def save_history_summary(
     conversation_id: int, user_id: str, tenant_id: str,
-    summary: Dict[str, Any], covered_through_message_id: int,
+    summary: Dict[str, Any] | str, covered_through_message_id: int,
     previous_summary_unit_id: Optional[int] = None,
     trigger: Optional[str] = None,
+    covered_raw_tokens: Optional[int] = None,
+    summary_tokens: Optional[int] = None,
+    covered_turn_count: Optional[int] = None,
+    stats_complete: bool = False,
+    generation_input_tokens: int = 0,
+    generation_output_tokens: int = 0,
 ) -> int:
     """Persist a validated checkpoint on its last covered assistant message."""
-    if not user_id or not tenant_id or not isinstance(summary, dict):
+    if not user_id or not tenant_id or not (
+        isinstance(summary, dict)
+        or (isinstance(summary, str) and summary.strip())
+    ):
         raise HistorySummaryPersistenceError(
-            "user_id, tenant_id and an object summary are required")
+            "user_id, tenant_id and a non-empty summary are required")
     conversation_id = int(conversation_id)
     covered_through_message_id = int(covered_through_message_id)
     user_tenant = _get_user_tenant(user_id)
@@ -1592,7 +1620,18 @@ def save_history_summary(
         payload: Dict[str, Any] = {
             "summary": summary,
             "covered_through_message_id": covered_through_message_id,
+            "stats_complete": bool(stats_complete),
+            "generation_input_tokens": max(0, int(generation_input_tokens or 0)),
+            "generation_output_tokens": max(0, int(generation_output_tokens or 0)),
         }
+        optional_stats = {
+            "covered_raw_tokens": covered_raw_tokens,
+            "summary_tokens": summary_tokens,
+            "covered_turn_count": covered_turn_count,
+        }
+        for field, value in optional_stats.items():
+            if value is not None:
+                payload[field] = max(0, int(value))
         if previous_summary_unit_id is not None:
             payload["previous_summary_unit_id"] = int(previous_summary_unit_id)
         if trigger:

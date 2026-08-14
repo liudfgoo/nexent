@@ -16,17 +16,33 @@ class HistorySummaryCandidate:
     covered_through_message_id: int
     previous_summary_unit_id: int | None = None
     trigger: str = "soft_budget_exceeded"
+    covered_raw_tokens: int | None = None
+    summary_tokens: int | None = None
+    covered_turn_count: int | None = None
+    stats_complete: bool = False
+    generation_input_tokens: int = 0
+    generation_output_tokens: int = 0
 
     def as_item(self) -> ContextItem:
+        content = {
+            "summary": self.summary,
+            "covered_through_message_id": self.covered_through_message_id,
+            "previous_summary_unit_id": self.previous_summary_unit_id,
+            "trigger": self.trigger,
+            "stats_complete": self.stats_complete,
+            "generation_input_tokens": self.generation_input_tokens,
+            "generation_output_tokens": self.generation_output_tokens,
+        }
+        if self.covered_raw_tokens is not None:
+            content["covered_raw_tokens"] = self.covered_raw_tokens
+        if self.summary_tokens is not None:
+            content["summary_tokens"] = self.summary_tokens
+        if self.covered_turn_count is not None:
+            content["covered_turn_count"] = self.covered_turn_count
         return ContextItem.from_input(ContextItemInput(
             id=f"history_summary:candidate:{self.covered_through_message_id}",
             type=ContextItemType.HISTORY_SUMMARY,
-            content={
-                "summary": self.summary,
-                "covered_through_message_id": self.covered_through_message_id,
-                "previous_summary_unit_id": self.previous_summary_unit_id,
-                "trigger": self.trigger,
-            },
+            content=content,
         ))
 
 

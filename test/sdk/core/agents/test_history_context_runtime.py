@@ -120,6 +120,92 @@ def test_adaptive_incrementally_compresses_only_summary_and_completed_turns(monk
     )
 
 
+def test_initial_summary_records_complete_semantic_savings(monkeypatch):
+    monkeypatch.setattr("smolagents.memory.SystemPromptStep", _SystemPrompt)
+    persisted = []
+    manager = ContextManager(ContextManagerConfig(
+        soft_input_budget_tokens=20, hard_input_budget_tokens=10_000,
+        policy_layers={"request": {"processing_mode": "adaptive_compact"}},
+        history_summary_sink=persisted.append,
+    ))
+    inputs = [ContextItemInput(id="turn:21:22", type="conversation_turn", content={
+        "user_message": "new question " * 40,
+        "assistant_final_answer": "new answer " * 40,
+        "attachments": [], "user_message_id": 21, "assistant_message_id": 22,
+    })]
+    memory = _Memory([TaskStep(task="current")])
+    run = manager.prepare_run_context(memory, "", inputs)
+
+    result = manager.assemble_final_context(
+        model=_SummaryModel(), memory=memory, current_run_start_idx=0,
+        run_context=run,
+    )
+
+    assert len(persisted) == 1
+    candidate = persisted[0]
+    assert candidate.stats_complete is True
+    assert candidate.covered_turn_count == 1
+    assert candidate.covered_raw_tokens > candidate.summary_tokens
+    assert result.evidence.semantic_status == "created"
+    assert result.evidence.semantic_stats_complete is True
+    assert result.evidence.semantic_saved_tokens > 0
+    assert result.evidence.compression_saved_tokens == (
+        result.evidence.semantic_saved_tokens
+        + result.evidence.structural_saved_tokens
+    )
+
+
+def test_reused_checkpoint_restores_active_semantic_savings(monkeypatch):
+    monkeypatch.setattr("smolagents.memory.SystemPromptStep", _SystemPrompt)
+    manager = ContextManager(ContextManagerConfig(
+        soft_input_budget_tokens=10_000,
+        policy_layers={"request": {"processing_mode": "adaptive_compact"}},
+    ))
+    inputs = [ContextItemInput(id="summary:10", type="history_summary", content={
+        "unit_id": 10,
+        "summary": "old summary text",
+        "covered_through_message_id": 20,
+        "covered_raw_tokens": 1_000,
+        "summary_tokens": 100,
+        "covered_turn_count": 4,
+        "stats_complete": True,
+    })]
+    memory = _Memory([TaskStep(task="current")])
+    run = manager.prepare_run_context(memory, "", inputs)
+
+    result = manager.assemble_final_context(
+        model=_SummaryModel(), memory=memory, current_run_start_idx=0,
+        run_context=run,
+    )
+
+    assert result.evidence.semantic_status == "reused"
+    assert result.evidence.semantic_saved_tokens == 900
+    assert result.evidence.semantic_covered_turn_count == 4
+    assert result.evidence.effective_raw_token_estimate == (
+        result.evidence.raw_token_estimate + 900
+    )
+
+
+def test_legacy_checkpoint_marks_semantic_savings_unknown(monkeypatch):
+    monkeypatch.setattr("smolagents.memory.SystemPromptStep", _SystemPrompt)
+    manager = ContextManager(ContextManagerConfig(
+        soft_input_budget_tokens=10_000,
+        policy_layers={"request": {"processing_mode": "adaptive_compact"}},
+    ))
+    memory = _Memory([TaskStep(task="current")])
+    run = manager.prepare_run_context(memory, "", [_summary_and_turns()[0]])
+
+    result = manager.assemble_final_context(
+        model=_SummaryModel(), memory=memory, current_run_start_idx=0,
+        run_context=run,
+    )
+
+    assert result.evidence.semantic_status == "reused"
+    assert result.evidence.semantic_saved_tokens is None
+    assert result.evidence.semantic_stats_complete is False
+    assert result.evidence.compression_stats_complete is False
+
+
 def test_summary_two_uses_summary_one_and_only_turns_after_its_coverage(monkeypatch):
     """A later checkpoint must not reintroduce raw turns covered by Summary 1."""
     monkeypatch.setattr("smolagents.memory.SystemPromptStep", _SystemPrompt)

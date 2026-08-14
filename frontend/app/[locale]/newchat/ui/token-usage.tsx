@@ -1,13 +1,19 @@
 "use client";
 
-import { useState, type FC } from "react";
+import { useRef, useState, type FC } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuiState, useMessageTiming } from "@assistant-ui/react";
 import { Zap } from "lucide-react";
 import {
-  stepTokenCounts,
-  type StepTokenCount,
-} from "../adapter/remote-chat-model-adapter";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { type StepTokenCount } from "../adapter/remote-chat-model-adapter";
+import {
+  calculateSingleTurnTokenUsage,
+  parseContextOverflowError,
+} from "./token-usage-calculation";
 
 interface TokenUsageProps {
   className?: string;
@@ -36,14 +42,18 @@ export const TokenUsage: FC<TokenUsageProps> = ({ className }) => {
       >
         <Zap className="size-3 text-amber-500" />
         <span className="font-medium text-foreground">{usagePercent}%</span>
-        <span className="text-muted-foreground/70">{t("chat.tokenUsage.used")}</span>
+        <span className="text-muted-foreground/70">
+          {t("chat.tokenUsage.used")}
+        </span>
       </button>
 
       {/* Expanded details popover */}
       {expanded && (
         <div className="absolute bottom-full right-0 z-50 mb-1 w-64 rounded-lg border border-border bg-popover p-3 shadow-lg">
           <div className="mb-3 flex items-center justify-between">
-            <span className="text-xs font-medium text-foreground">{t("chat.tokenUsage.details")}</span>
+            <span className="text-xs font-medium text-foreground">
+              {t("chat.tokenUsage.details")}
+            </span>
             <button
               type="button"
               onClick={() => setExpanded(false)}
@@ -69,7 +79,9 @@ export const TokenUsage: FC<TokenUsageProps> = ({ className }) => {
           {/* Progress bar */}
           <div className="mb-3">
             <div className="mb-1 flex justify-between text-xs">
-              <span className="text-muted-foreground">{t("chat.tokenUsage.context")}</span>
+              <span className="text-muted-foreground">
+                {t("chat.tokenUsage.context")}
+              </span>
               <span className="font-medium text-foreground">
                 {tokenCount.toLocaleString()} / 128000
               </span>
@@ -122,19 +134,23 @@ interface SingleTurnTokenUsageProps {
 }
 
 /**
- * Displays per-step token consumption with a stacked progress bar.
- * Each step shows input tokens (blue) + output tokens (amber) relative to the token threshold.
+ * Displays the latest step's estimated context usage relative to the model's
+ * context window. Earlier steps remain available from the step-count tooltip.
  *
  * Data source resolution:
- * - Prefer per-message metadata (`metadata.custom.stepTokenCounts`) so historical
- *   conversations restored via the thread history adapter can render the exact
- *   step breakdown persisted in the database.
- * - Fall back to the global `stepTokenCounts` registry written during live
- *   streaming runs.
+ * Both live runs and historical restores bind a detached step-token snapshot to
+ * `metadata.custom.stepTokenCounts`, so every rendered message owns its data.
  */
-export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({ className }) => {
+export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({
+  className,
+}) => {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const [stepHistoryOpen, setStepHistoryOpen] = useState(false);
+  const [stepHistoryPinned, setStepHistoryPinned] = useState(false);
+  const stepHistoryCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   const messageSteps = useAuiState((s) => {
     const custom = s.message.metadata?.custom as
@@ -142,152 +158,446 @@ export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({ className 
       | undefined;
     return custom?.stepTokenCounts;
   });
+  const messageContent = useAuiState(
+    (s) => s.message.content
+  ) as ReadonlyArray<{
+    type?: string;
+    text?: string;
+  }>;
 
-  // Message-level metadata wins when present; otherwise use the live stream
-  // registry. The two sources are never populated simultaneously — historical
-  // conversations take the metadata path, live streaming takes the registry.
-  const steps: readonly StepTokenCount[] = messageSteps ?? stepTokenCounts;
-
-  if (steps.length === 0) return null;
-
-  const latestStep = steps[steps.length - 1];
-  const contextWindowTokens = latestStep.contextWindowTokens;
-  const tokenThreshold = latestStep.tokenThreshold;
-  const maxTokens = contextWindowTokens ?? tokenThreshold;
-
-  if (maxTokens === null) return null;
-
-  const stepCount = steps.length;
-
-  // Calculate total tokens used (sum of step_input_tokens + step_output_tokens for all steps)
-  const totalTokensUsed = steps.reduce(
-    (sum, step) => sum + step.stepInputTokens + step.stepOutputTokens,
-    0
+  const steps: readonly StepTokenCount[] = messageSteps ?? [];
+  const contextOverflow = parseContextOverflowError(
+    messageContent
+      .filter((part) => part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n")
   );
 
-  const usagePercent = Math.round((totalTokensUsed / maxTokens) * 100);
+  const usage = calculateSingleTurnTokenUsage(steps, contextOverflow);
+  if (!usage) return null;
+
+  const {
+    latest,
+    previous,
+    stepCount,
+    totalTokensUsed,
+    usagePercent,
+    cumulativeSavedTokens,
+    summaryGenerationCostTokens,
+  } = usage;
+
+  const formatCompactTokens = (tokens: number) => {
+    if (tokens < 1_000) return tokens.toLocaleString();
+    const compact = tokens / 1_000;
+    return `${compact >= 10 ? compact.toFixed(0) : compact.toFixed(1)}k`;
+  };
+
+  const semanticStatusLabel = (status: string) => {
+    switch (status) {
+      case "created":
+        return t("chat.tokenUsage.semanticStatusCreated");
+      case "updated":
+        return t("chat.tokenUsage.semanticStatusUpdated");
+      case "reused":
+        return t("chat.tokenUsage.semanticStatusReused");
+      case "failed":
+        return t("chat.tokenUsage.semanticStatusFailed");
+      default:
+        return t("chat.tokenUsage.semanticStatusNone");
+    }
+  };
+
+  const stepSummary = (stepUsage: typeof latest) =>
+    t("chat.tokenUsage.stepSummary", {
+      step: stepUsage.step.stepNumber,
+      input: stepUsage.contextInputTokens.toLocaleString(),
+      output: stepUsage.outputTokens.toLocaleString(),
+    });
+
+  const cancelStepHistoryClose = () => {
+    if (stepHistoryCloseTimer.current !== null) {
+      clearTimeout(stepHistoryCloseTimer.current);
+      stepHistoryCloseTimer.current = null;
+    }
+  };
+
+  const openStepHistoryPreview = () => {
+    cancelStepHistoryClose();
+    setStepHistoryOpen(true);
+  };
+
+  const scheduleStepHistoryClose = () => {
+    cancelStepHistoryClose();
+    stepHistoryCloseTimer.current = setTimeout(() => {
+      if (!stepHistoryPinned) setStepHistoryOpen(false);
+    }, 120);
+  };
+
+  const toggleStepHistoryPinned = (
+    event: React.MouseEvent<HTMLButtonElement>
+  ) => {
+    event.preventDefault();
+    cancelStepHistoryClose();
+    const nextPinned = !stepHistoryPinned;
+    setStepHistoryPinned(nextPinned);
+    setStepHistoryOpen(nextPinned);
+  };
+
+  const renderStepProgress = (stepUsage: typeof latest) => (
+    <div
+      className="flex h-3 overflow-hidden rounded-full bg-muted"
+      title={stepSummary(stepUsage)}
+    >
+      <div
+        className="h-full bg-blue-500"
+        style={{ width: `${stepUsage.inputPercent}%` }}
+      />
+      <div
+        className="h-full bg-amber-500"
+        style={{ width: `${stepUsage.outputPercent}%` }}
+      />
+    </div>
+  );
+
+  const renderStepCompression = (stepUsage: typeof latest, compact = false) => {
+    const compression = stepUsage.compression;
+    if (!compression) return null;
+    const hasSavings = compression.savedTokens > 0;
+    const hasCompressionDetail =
+      hasSavings || compression.semanticStatus !== "none";
+    const isDisabled = stepUsage.step.contextProcessingMode === "passthrough";
+
+    if (compact) {
+      return (
+        <div className="mt-1.5 text-[11px] text-muted-foreground">
+          {hasSavings ? (
+            <>
+              {compression.effectiveUncompressedTokens.toLocaleString()} →{" "}
+              {compression.finalTokens.toLocaleString()} ·{" "}
+              <span className="text-emerald-600 dark:text-emerald-400">
+                {t("chat.tokenUsage.savedTokens", {
+                  tokens: compression.savedTokens.toLocaleString(),
+                  percent: compression.savedPercent.toFixed(1),
+                })}
+              </span>
+            </>
+          ) : compression.semanticStatus !== "none" ? (
+            <span>
+              {t("chat.tokenUsage.historySemanticCompression")} ·{" "}
+              {semanticStatusLabel(compression.semanticStatus)}
+            </span>
+          ) : (
+            <span>
+              {isDisabled
+                ? t("chat.tokenUsage.compressionNotEnabled")
+                : t("chat.tokenUsage.compressionNotTriggered")}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="mb-3 border-t border-border pt-3 text-xs">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <span className="font-medium text-foreground">
+            {t("chat.tokenUsage.compressionEffect")}
+          </span>
+          {hasSavings && (
+            <span className="font-medium text-emerald-600 dark:text-emerald-400">
+              {t("chat.tokenUsage.savedTokens", {
+                tokens: compression.savedTokens.toLocaleString(),
+                percent: compression.savedPercent.toFixed(1),
+              })}
+            </span>
+          )}
+        </div>
+
+        {hasCompressionDetail ? (
+          <div className="rounded-md bg-muted/60 p-2.5">
+            {hasSavings && (
+              <div className="mb-2 text-muted-foreground">
+                {t("chat.tokenUsage.compressionRange", {
+                  before:
+                    compression.effectiveUncompressedTokens.toLocaleString(),
+                  after: compression.finalTokens.toLocaleString(),
+                })}
+                {!compression.statsComplete && (
+                  <span className="ml-1">
+                    · {t("chat.tokenUsage.statsIncomplete")}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {(compression.structuralSavedTokens > 0 ||
+              compression.structuralCompactCount > 0 ||
+              compression.fallbackCompactionUsed) && (
+              <div className="flex items-center justify-between gap-3 border-t border-border/60 py-2">
+                <span className="flex items-center gap-1.5 text-foreground">
+                  <span className="size-2 rounded-sm bg-violet-500" />
+                  {t("chat.tokenUsage.structuralCompression")}
+                </span>
+                <span className="text-right text-muted-foreground">
+                  <span className="block font-medium text-foreground">
+                    {compression.structuralSavedTokens.toLocaleString()} Token
+                  </span>
+                  {t("chat.tokenUsage.compactedItems", {
+                    count: compression.structuralCompactCount,
+                  })}
+                </span>
+              </div>
+            )}
+
+            {compression.semanticStatus !== "none" && (
+              <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-2">
+                <span className="flex items-center gap-1.5 text-foreground">
+                  <span className="size-2 rounded-sm bg-teal-500" />
+                  {t("chat.tokenUsage.historySemanticCompression")}
+                </span>
+                <span className="text-right text-muted-foreground">
+                  <span className="block font-medium text-foreground">
+                    {compression.semanticStatsComplete &&
+                    compression.semanticSavedTokens !== null
+                      ? `${compression.semanticSavedTokens.toLocaleString()} Token`
+                      : t("chat.tokenUsage.statsUnavailable")}
+                  </span>
+                  {compression.semanticCoveredTurnCount !== null &&
+                    `${t("chat.tokenUsage.coveredTurns", {
+                      count: compression.semanticCoveredTurnCount,
+                    })} · `}
+                  {semanticStatusLabel(compression.semanticStatus)}
+                </span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-md bg-muted/60 px-2.5 py-2 text-muted-foreground">
+            {isDisabled
+              ? t("chat.tokenUsage.compressionNotEnabled")
+              : t("chat.tokenUsage.compressionNotTriggered")}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted ${className ?? ""}`}
-      >
-        <Zap className="size-3 text-amber-500" />
-        <span className="font-medium text-foreground">{usagePercent}%</span>
-        <span className="text-muted-foreground/70">{t("chat.tokenUsage.turn")}</span>
-      </button>
+    <Popover
+      open={expanded}
+      onOpenChange={(open) => {
+        setExpanded(open);
+        if (!open) {
+          cancelStepHistoryClose();
+          setStepHistoryOpen(false);
+          setStepHistoryPinned(false);
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted ${className ?? ""}`}
+        >
+          <Zap className="size-3 text-amber-500" />
+          <span
+            className={`font-medium ${latest.isOverflow ? "text-destructive" : "text-foreground"}`}
+          >
+            {latest.isOverflow
+              ? t("chat.tokenUsage.overflow")
+              : `${usagePercent}%`}
+          </span>
+          <span className="text-muted-foreground/70">
+            {t("chat.tokenUsage.turn")}
+          </span>
+          {latest.compression && latest.compression.savedTokens > 0 && (
+            <span className="text-emerald-600 dark:text-emerald-400">
+              ·{" "}
+              {t("chat.tokenUsage.savedCompact", {
+                tokens: formatCompactTokens(latest.compression.savedTokens),
+              })}
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
 
       {/* Expanded details popover */}
-      {expanded && (
-        <div className="absolute bottom-full right-0 z-50 mb-1 w-72 rounded-lg border border-border bg-popover p-3 shadow-lg">
-          <div className="mb-3 flex items-center justify-between">
-            <span className="text-xs font-medium text-foreground">
-              {t("chat.tokenUsage.turnDetails")}
-            </span>
-            <button
-              type="button"
-              onClick={() => setExpanded(false)}
-              className="text-muted-foreground hover:text-foreground"
+      <PopoverContent
+        side="top"
+        align="end"
+        collisionPadding={12}
+        className="max-h-[calc(100vh-1.5rem)] w-80 overflow-y-auto p-3"
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-xs font-medium text-foreground">
+            {t("chat.tokenUsage.turnDetails")}
+          </span>
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <span className="sr-only">{t("chat.tokenUsage.close")}</span>
+            <svg
+              className="size-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
             >
-              <span className="sr-only">{t("chat.tokenUsage.close")}</span>
-              <svg
-                className="size-3.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
-          </div>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
 
-          {/* Stacked progress bar */}
-          <div className="mb-3">
-            <div className="mb-1.5 flex justify-between text-xs">
-              <span className="text-muted-foreground">{t("chat.tokenUsage.context")}</span>
+        {/* Latest step context usage */}
+        <div className="mb-3">
+          <div className="mb-1.5 flex justify-between text-xs">
+            <span className="text-muted-foreground">
+              {t("chat.tokenUsage.latestContextCall")}
+            </span>
+            <div className="flex items-center gap-1.5">
+              {latest.isOverflow && (
+                <span className="rounded bg-destructive/10 px-1.5 py-0.5 font-medium text-destructive">
+                  {t("chat.tokenUsage.overflow")}
+                </span>
+              )}
               <span className="font-medium text-foreground">
-                {totalTokensUsed.toLocaleString()} / {maxTokens.toLocaleString()}
+                {latest.contextInputTokens.toLocaleString()} /{" "}
+                {latest.contextWindowTokens.toLocaleString()}
               </span>
             </div>
-            <div className="flex h-3 overflow-hidden rounded-full bg-muted">
-              {steps.map((step, index) => {
-                const stepTotal = step.stepInputTokens + step.stepOutputTokens;
-                const stepPercent = (stepTotal / maxTokens) * 100;
-                const inputPercent = (step.stepInputTokens / maxTokens) * 100;
-                const outputPercent = (step.stepOutputTokens / maxTokens) * 100;
-
-                return (
-                  <div
-                    key={step.stepNumber}
-                    className="group relative"
-                    style={{
-                      width: `${Math.min(stepPercent, 100 - (index > 0 ? steps.slice(0, index).reduce((sum, s) => sum + ((s.stepInputTokens + s.stepOutputTokens) / maxTokens) * 100, 0) : 0))}%`,
-                    }}
-                    title={t("chat.tokenUsage.stepSummary", { step: step.stepNumber, input: step.stepInputTokens, output: step.stepOutputTokens })}
-                  >
-                    {/* Input portion (blue) */}
-                    <div
-                      className="absolute inset-y-0 left-0 bg-blue-500"
-                      style={{ width: `${(inputPercent / stepPercent) * 100}%` }}
-                    />
-                    {/* Output portion (amber) */}
-                    <div
-                      className="absolute inset-y-0 bg-amber-500"
-                      style={{
-                        left: `${(inputPercent / stepPercent) * 100}%`,
-                        width: `${(outputPercent / stepPercent) * 100}%`,
-                      }}
-                    />
-                    {/* Step number label on hover */}
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
-                      <span className="text-[9px] font-medium text-white drop-shadow-md">
-                        {step.stepNumber}
-                      </span>
-                    </div>
-                  </div>
-                );
+          </div>
+          {renderStepProgress(latest)}
+          {latest.isOverflow && latest.hardBudgetTokens !== null && (
+            <div className="mt-1.5 text-xs text-destructive">
+              {t("chat.tokenUsage.hardInputBudgetOverflow", {
+                budget: latest.hardBudgetTokens.toLocaleString(),
+                excess: (
+                  latest.contextInputTokens - latest.hardBudgetTokens
+                ).toLocaleString(),
               })}
             </div>
-          </div>
+          )}
+        </div>
 
-          {/* Legend */}
-          <div className="mb-3 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-1.5">
-                <span className="size-2.5 rounded-sm bg-blue-500" />
-                <span className="text-muted-foreground">{t("chat.tokenUsage.input")}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="size-2.5 rounded-sm bg-amber-500" />
-                <span className="text-muted-foreground">{t("chat.tokenUsage.output")}</span>
-              </div>
+        {renderStepCompression(latest)}
+
+        {/* Legend */}
+        <div className="mb-3 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5">
+              <span className="size-2.5 rounded-sm bg-blue-500" />
+              <span className="text-muted-foreground">
+                {t("chat.tokenUsage.input")}
+              </span>
             </div>
+            <div className="flex items-center gap-1.5">
+              <span className="size-2.5 rounded-sm bg-amber-500" />
+              <span className="text-muted-foreground">
+                {t("chat.tokenUsage.output")}
+              </span>
+            </div>
+          </div>
+          {previous.length > 0 ? (
+            <Popover
+              open={stepHistoryOpen}
+              onOpenChange={(open) => {
+                setStepHistoryOpen(open);
+                if (!open) setStepHistoryPinned(false);
+              }}
+            >
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  aria-expanded={stepHistoryOpen}
+                  onMouseEnter={openStepHistoryPreview}
+                  onMouseLeave={scheduleStepHistoryClose}
+                  onClick={toggleStepHistoryPinned}
+                  className="rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary"
+                >
+                  {t("chat.tokenUsage.steps", { count: stepCount })}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                side="top"
+                align="end"
+                collisionPadding={12}
+                onMouseEnter={cancelStepHistoryClose}
+                onMouseLeave={scheduleStepHistoryClose}
+                className="w-80 p-3"
+              >
+                <div className="custom-scrollbar max-h-56 space-y-3 overflow-y-auto">
+                  {previous.map((stepUsage) => (
+                    <div
+                      key={stepUsage.step.stepNumber}
+                      className="space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-3 text-xs">
+                        <span className="font-medium">
+                          {stepSummary(stepUsage)}
+                        </span>
+                        <span className="shrink-0 text-muted-foreground">
+                          {stepUsage.contextInputTokens.toLocaleString()} /{" "}
+                          {stepUsage.contextWindowTokens.toLocaleString()}
+                        </span>
+                      </div>
+                      {renderStepProgress(stepUsage)}
+                      {renderStepCompression(stepUsage, true)}
+                    </div>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
+          ) : (
             <span className="rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
               {t("chat.tokenUsage.steps", { count: stepCount })}
             </span>
-          </div>
+          )}
+        </div>
 
-          {/* Step details */}
-          <div className="space-y-2 text-xs">
-            <div className="flex items-center justify-between border-t border-border pt-2">
-              <span className="flex items-center gap-1.5 text-muted-foreground">
-                <span className="font-medium">{t("chat.tokenUsage.total")}</span>
+        {/* Step details */}
+        <div className="space-y-2 text-xs">
+          <div className="flex items-center justify-between border-t border-border pt-2">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="font-medium">
+                {t("chat.tokenUsage.actualTokensTotal")}
               </span>
-              <span className="font-medium text-foreground">
-                {totalTokensUsed.toLocaleString()} / {maxTokens.toLocaleString()}
+            </span>
+            <span className="font-medium text-foreground">
+              {totalTokensUsed.toLocaleString()}
+            </span>
+          </div>
+          {cumulativeSavedTokens > 0 && (
+            <div
+              className="flex items-center justify-between"
+              title={t("chat.tokenUsage.cumulativeSavedHelp")}
+            >
+              <span className="font-medium text-muted-foreground">
+                {t("chat.tokenUsage.cumulativeSaved")}
+              </span>
+              <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                {cumulativeSavedTokens.toLocaleString()} Token
               </span>
             </div>
-          </div>
+          )}
+          {summaryGenerationCostTokens > 0 && (
+            <div className="flex items-center justify-between">
+              <span className="font-medium text-muted-foreground">
+                {t("chat.tokenUsage.summaryGenerationCost")}
+              </span>
+              <span className="font-medium text-foreground">
+                {summaryGenerationCostTokens.toLocaleString()} Token
+              </span>
+            </div>
+          )}
         </div>
-      )}
-    </div>
+      </PopoverContent>
+    </Popover>
   );
 };
 

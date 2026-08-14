@@ -842,6 +842,7 @@ class NexentAgent:
                         }
                         if last_metric:
                             compression = last_metric.get("compression", {}) or {}
+                            context_compression = last_metric.get("context_compression", {}) or {}
                             token_data.update({
                                 "compression_calls": compression.get("calls", 0),
                                 "compression_input_tokens": compression.get("input_tokens", 0),
@@ -850,6 +851,7 @@ class NexentAgent:
                                 "compression_cache_types": compression.get("cache_types", []),
                                 "compression_ratio": last_metric.get("compression_ratio", 0.0),
                                 "uncompressed_est_tokens": last_metric.get("uncompressed_mem_est_input", 0),
+                                **context_compression,
                             })
                         active_model = getattr(self.agent, "model", None)
                         cache_usage = getattr(active_model, "last_prompt_cache_usage", None)

@@ -7,7 +7,7 @@ import json
 import logging
 import threading
 from copy import deepcopy
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, is_dataclass, replace
 from enum import Enum
 from typing import Any, Dict, Optional, Sequence
 
@@ -120,31 +120,106 @@ class ContextManager:
         canonical_tools = self._canonical_tools(tools or ())
         raw_tokens = self._estimate_items(items, purpose_stable, purpose_dynamic, canonical_tools)
         final_items = list(items)
+        active_summary = next((
+            item for item in final_items
+            if item.type == ContextItemType.HISTORY_SUMMARY
+        ), None)
+        loaded_summary_saved, semantic_stats_complete = self._active_summary_savings(
+            active_summary
+        )
+        effective_raw_tokens = raw_tokens + (loaded_summary_saved or 0)
+        post_semantic_tokens = raw_tokens
+        semantic_status = "reused" if active_summary is not None else "none"
+        semantic_saved_tokens = loaded_summary_saved
+        semantic_covered_turn_count = self._optional_non_negative_int(
+            active_summary.content.get("covered_turn_count")
+            if active_summary is not None else None
+        )
+        summary_generation_input_tokens = 0
+        summary_generation_output_tokens = 0
         history_triggered = False
         new_coverage = None
         persist_status = "not_attempted"
         self._step_local_log = []
 
         if policy.processing_mode == ContextProcessingMode.ADAPTIVE_COMPACT and raw_tokens > self._soft_input_budget_tokens():
-            summary = next((item for item in final_items if item.type == ContextItemType.HISTORY_SUMMARY), None)
+            summary = active_summary
             turns = [item for item in final_items if item.type == ContextItemType.CONVERSATION_TURN]
             if turns:
                 history_triggered = True
                 result = self._history_compressor.compress(summary, turns, model)
                 self._record_compression(result.records)
+                summary_generation_input_tokens = sum(
+                    max(0, int(getattr(record, "input_tokens", 0) or 0))
+                    for record in result.records
+                )
+                summary_generation_output_tokens = sum(
+                    max(0, int(getattr(record, "output_tokens", 0) or 0))
+                    for record in result.records
+                )
                 if result.candidate is not None:
-                    self._history_candidate = result.candidate
-                    new_coverage = result.candidate.covered_through_message_id
+                    previous_raw_tokens = self._optional_non_negative_int(
+                        summary.content.get("covered_raw_tokens")
+                        if summary is not None else None
+                    )
+                    previous_turn_count = self._optional_non_negative_int(
+                        summary.content.get("covered_turn_count")
+                        if summary is not None else None
+                    )
+                    checkpoint_stats_complete = (
+                        summary is None
+                        or (
+                            semantic_stats_complete
+                            and previous_raw_tokens is not None
+                            and previous_turn_count is not None
+                        )
+                    )
+                    new_turn_tokens = self._message_tokens(
+                        self.build_context_messages(turns)
+                    )
+                    covered_raw_tokens = (
+                        (previous_raw_tokens or 0) + new_turn_tokens
+                        if checkpoint_stats_complete else None
+                    )
+                    covered_turn_count = (
+                        (previous_turn_count or 0) + len(turns)
+                        if checkpoint_stats_complete else None
+                    )
+                    candidate = replace(
+                        result.candidate,
+                        covered_raw_tokens=covered_raw_tokens,
+                        covered_turn_count=covered_turn_count,
+                        stats_complete=checkpoint_stats_complete,
+                        generation_input_tokens=summary_generation_input_tokens,
+                        generation_output_tokens=summary_generation_output_tokens,
+                    )
+                    candidate_summary_tokens = self._message_tokens(
+                        self.build_context_messages([candidate.as_item()])
+                    )
+                    candidate = replace(candidate, summary_tokens=candidate_summary_tokens)
+                    self._history_candidate = candidate
+                    new_coverage = candidate.covered_through_message_id
                     final_items = [item for item in final_items if item.type not in {
                         ContextItemType.HISTORY_SUMMARY, ContextItemType.CONVERSATION_TURN,
                     }]
-                    final_items.append(result.candidate.as_item())
-                    persist_status = self._persist_candidate(result.candidate)
+                    final_items.append(candidate.as_item())
+                    post_semantic_tokens = self._estimate_items(
+                        final_items, purpose_stable, purpose_dynamic, canonical_tools
+                    )
+                    semantic_status = "updated" if summary is not None else "created"
+                    semantic_stats_complete = checkpoint_stats_complete
+                    semantic_covered_turn_count = covered_turn_count
+                    semantic_saved_tokens = (
+                        max(0, effective_raw_tokens - post_semantic_tokens)
+                        if checkpoint_stats_complete else None
+                    )
+                    persist_status = self._persist_candidate(candidate)
                     self._pending_history_summary_event = {
-                        **deepcopy(result.candidate.as_item().content),
+                        **deepcopy(candidate.as_item().content),
                         "persist_status": persist_status,
                     }
                 elif result.fallback_turns:
+                    semantic_status = "failed"
                     fallback_by_id = {item.id: item for item in result.fallback_turns}
                     final_items = [fallback_by_id.get(item.id, item) for item in final_items]
 
@@ -159,6 +234,8 @@ class ContextManager:
         dynamic = [message for message in rendered if message_role(message) not in {"system", "developer"}]
         messages = [*stable, *purpose_stable, *dynamic, *purpose_dynamic]
         final_tokens = self._message_tokens(messages) + self._tools_tokens(canonical_tools)
+        structural_saved_tokens = max(0, post_semantic_tokens - final_tokens)
+        compression_saved_tokens = max(0, effective_raw_tokens - final_tokens)
         self._last_uncompressed_token_count = raw_tokens
         self._last_compressed_token_count = final_tokens
         hard = self._hard_input_budget_tokens()
@@ -170,6 +247,13 @@ class ContextManager:
         representations = tuple((
             item.id, str(item.metadata.get("representation", "raw"))
         ) for item in final_items)
+        structural_compact_count = sum(
+            representation != "raw" for _, representation in representations
+        )
+        history_fallback_used = any(
+            bool(item.metadata.get("history_fallback_limited"))
+            for item in final_items
+        )
         hits = sum(item.representation_cache_stats[0] for item in items)
         misses = sum(item.representation_cache_stats[1] for item in items)
         loaded = next((item for item in run_context.items if item.type == ContextItemType.HISTORY_SUMMARY), None)
@@ -194,7 +278,20 @@ class ContextManager:
                 policy_fingerprint=run_context.selection_decision.policy_fingerprint if run_context.selection_decision else None,
                 processing_mode=policy.processing_mode.value,
                 soft_budget=self._soft_input_budget_tokens(), hard_budget=hard,
-                raw_token_estimate=raw_tokens, final_token_estimate=final_tokens,
+                raw_token_estimate=raw_tokens,
+                effective_raw_token_estimate=effective_raw_tokens,
+                post_semantic_token_estimate=post_semantic_tokens,
+                final_token_estimate=final_tokens,
+                compression_saved_tokens=compression_saved_tokens,
+                compression_stats_complete=semantic_stats_complete,
+                structural_saved_tokens=structural_saved_tokens,
+                structural_compact_count=structural_compact_count,
+                semantic_saved_tokens=semantic_saved_tokens,
+                semantic_status=semantic_status,
+                semantic_covered_turn_count=semantic_covered_turn_count,
+                semantic_stats_complete=semantic_stats_complete,
+                summary_generation_input_tokens=summary_generation_input_tokens,
+                summary_generation_output_tokens=summary_generation_output_tokens,
                 loaded_summary_unit_id=(loaded.content.get("unit_id") if loaded else None),
                 loaded_summary_coverage=(loaded.content.get("covered_through_message_id") if loaded else None),
                 new_history_turn_count=sum(item.type == ContextItemType.CONVERSATION_TURN for item in run_context.items),
@@ -218,9 +315,39 @@ class ContextManager:
                 message_roles=message_roles,
                 history_message_roles=tuple(message_role(message) for message in history_messages),
                 compression_attempted=bool(self._step_local_log),
-                fallback_compaction_used=any(representation != "raw" for _, representation in representations),
+                fallback_compaction_used=(
+                    structural_compact_count > 0 or history_fallback_used
+                ),
             ),
         )
+
+    @classmethod
+    def _active_summary_savings(
+        cls, summary: ContextItem | None,
+    ) -> tuple[int | None, bool]:
+        if summary is None:
+            return 0, True
+        if summary.content.get("stats_complete") is not True:
+            return None, False
+        covered_raw_tokens = cls._optional_non_negative_int(
+            summary.content.get("covered_raw_tokens")
+        )
+        summary_tokens = cls._optional_non_negative_int(
+            summary.content.get("summary_tokens")
+        )
+        if covered_raw_tokens is None or summary_tokens is None:
+            return None, False
+        return max(0, covered_raw_tokens - summary_tokens), True
+
+    @staticmethod
+    def _optional_non_negative_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None
+        return normalized if normalized >= 0 else None
 
     def consume_history_summary_event(self) -> dict[str, Any] | None:
         """Return a newly-created summary checkpoint once for stream display."""

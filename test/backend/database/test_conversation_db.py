@@ -2511,6 +2511,24 @@ def test_parse_history_summary_requires_summary_and_positive_boundary():
     assert _parse_history_summary_content("not-json") is None
 
 
+def test_parse_history_summary_accepts_markdown_and_optional_token_stats():
+    payload = _parse_history_summary_content(json.dumps({
+        "summary": "# Compact Result of History\n\n## Task Overview\n\ndone",
+        "covered_through_message_id": 24,
+        "covered_raw_tokens": 1_000,
+        "summary_tokens": 120,
+        "covered_turn_count": 3,
+        "stats_complete": True,
+        "generation_input_tokens": 300,
+        "generation_output_tokens": 80,
+    }))
+
+    assert payload["covered_raw_tokens"] == 1_000
+    assert payload["summary_tokens"] == 120
+    assert payload["covered_turn_count"] == 3
+    assert payload["stats_complete"] is True
+
+
 def test_save_history_summary_rejects_cross_tenant_before_database(monkeypatch):
     monkeypatch.setattr(
         "backend.database.conversation_db._get_user_tenant",
@@ -2554,6 +2572,45 @@ def test_save_history_summary_appends_after_last_unit(monkeypatch, mock_session_
     payload = __import__("json").loads(fresh_insert_mock["unit_content"])
     assert payload["covered_through_message_id"] == 24
     assert payload["trigger"] == "soft_budget_exceeded"
+
+
+def test_save_history_summary_persists_optional_token_stats(
+        monkeypatch, mock_session_ctx, fresh_insert_mock):
+    from types import SimpleNamespace
+    session, ctx = mock_session_ctx
+    monkeypatch.setattr(
+        "backend.database.conversation_db._get_user_tenant",
+        lambda _user_id: {"tenant_id": "tenant-a"})
+    message_index_column = MagicMock()
+    message_index_column.__gt__.return_value = MagicMock()
+    message_index_column.__le__.return_value = MagicMock()
+    monkeypatch.setattr(ConversationMessage, "message_index", message_index_column)
+    owner_result = MagicMock()
+    owner_result.first.return_value = SimpleNamespace(conversation_id=1)
+    covered_result = MagicMock()
+    covered_result.first.return_value = SimpleNamespace(
+        message_id=24, message_index=3, message_role="assistant",
+        status="completed")
+    insert_result = MagicMock()
+    insert_result.scalar_one.return_value = 1001
+    session.execute.side_effect = [owner_result, covered_result, insert_result]
+    session.scalar.side_effect = [0, 4]
+    monkeypatch.setattr("backend.database.conversation_db.get_db_session", lambda: ctx)
+
+    save_history_summary(
+        1, "user-a", "tenant-a", "## Task Overview\n\ndone", 24,
+        covered_raw_tokens=1_000, summary_tokens=120,
+        covered_turn_count=3, stats_complete=True,
+        generation_input_tokens=300, generation_output_tokens=80,
+    )
+
+    payload = json.loads(fresh_insert_mock["unit_content"])
+    assert payload["covered_raw_tokens"] == 1_000
+    assert payload["summary_tokens"] == 120
+    assert payload["covered_turn_count"] == 3
+    assert payload["stats_complete"] is True
+    assert payload["generation_input_tokens"] == 300
+    assert payload["generation_output_tokens"] == 80
 
 
 def test_save_history_summary_rejects_incomplete_covered_range(

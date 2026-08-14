@@ -1383,7 +1383,23 @@ class MonitoringManager:
             "context.budget.soft": getattr(evidence, "soft_budget", 0),
             "context.budget.hard": getattr(evidence, "hard_budget", 0),
             "context.tokens.pre_compression": getattr(evidence, "raw_token_estimate", 0),
+            "context.tokens.effective_uncompressed": getattr(
+                evidence, "effective_raw_token_estimate", 0
+            ),
+            "context.tokens.post_semantic": getattr(
+                evidence, "post_semantic_token_estimate", 0
+            ),
             "context.tokens.post_compression": getattr(evidence, "final_token_estimate", 0),
+            "context.tokens.saved": getattr(evidence, "compression_saved_tokens", 0),
+            "context.compression.structural_saved": getattr(
+                evidence, "structural_saved_tokens", 0
+            ),
+            "context.compression.semantic_saved": getattr(
+                evidence, "semantic_saved_tokens", 0
+            ) or 0,
+            "context.compression.semantic_status": getattr(
+                evidence, "semantic_status", "none"
+            ),
             "context.budget.hard_exceeded": bool(getattr(evidence, "over_hard_budget", False)),
             "context.compression.attempted": bool(getattr(evidence, "compression_attempted", False)),
             "context.compression.fallback_compaction": bool(getattr(evidence, "fallback_compaction_used", False)),

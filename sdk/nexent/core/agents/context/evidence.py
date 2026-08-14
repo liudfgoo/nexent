@@ -49,6 +49,42 @@ class ContextEvidenceCollector:
                     latest,
                     compression_records=compression_records,
                     raw_token_estimate=max(call.raw_token_estimate for call in self._calls),
+                    effective_raw_token_estimate=max(
+                        call.effective_raw_token_estimate for call in self._calls
+                    ),
+                    compression_saved_tokens=sum(
+                        call.compression_saved_tokens for call in self._calls
+                    ),
+                    compression_stats_complete=all(
+                        call.compression_stats_complete for call in self._calls
+                    ),
+                    structural_saved_tokens=sum(
+                        call.structural_saved_tokens for call in self._calls
+                    ),
+                    structural_compact_count=max(
+                        call.structural_compact_count for call in self._calls
+                    ),
+                    semantic_saved_tokens=next((
+                        call.semantic_saved_tokens for call in reversed(self._calls)
+                        if call.semantic_saved_tokens is not None
+                    ), None),
+                    semantic_status=next((
+                        call.semantic_status for call in reversed(self._calls)
+                        if call.semantic_status != "none"
+                    ), "none"),
+                    semantic_covered_turn_count=next((
+                        call.semantic_covered_turn_count for call in reversed(self._calls)
+                        if call.semantic_covered_turn_count is not None
+                    ), None),
+                    semantic_stats_complete=all(
+                        call.semantic_stats_complete for call in self._calls
+                    ),
+                    summary_generation_input_tokens=sum(
+                        call.summary_generation_input_tokens for call in self._calls
+                    ),
+                    summary_generation_output_tokens=sum(
+                        call.summary_generation_output_tokens for call in self._calls
+                    ),
                     history_compression_triggered=any(
                         call.history_compression_triggered for call in self._calls
                     ),

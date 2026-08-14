@@ -1720,6 +1720,23 @@ def test_agent_run_with_observer_forwards_compression_and_provider_cache_metrics
         "uncompressed_mem_est_input": 100,
         "cache_hit": True,
         "cache_types": ["summary"],
+        "context_compression": {
+            "effective_uncompressed_context_tokens": 100,
+            "post_semantic_context_tokens": 75,
+            "final_context_tokens": 60,
+            "compression_saved_tokens": 40,
+            "compression_stats_complete": True,
+            "structural_saved_tokens": 15,
+            "structural_compact_count": 2,
+            "semantic_saved_tokens": 25,
+            "semantic_status": "updated",
+            "semantic_covered_turn_count": 3,
+            "semantic_stats_complete": True,
+            "summary_generation_input_tokens": 100,
+            "summary_generation_output_tokens": 40,
+            "summary_persist_status": "succeeded",
+            "fallback_compaction_used": True,
+        },
     }]
     mock_core_agent.model = types.SimpleNamespace(
         last_provider_cache_advice=types.SimpleNamespace(supported=True),
@@ -1745,6 +1762,15 @@ def test_agent_run_with_observer_forwards_compression_and_provider_cache_metrics
     ][-1]
     assert payload["compression_calls"] == 2
     assert payload["compression_cache_hits"] == 1
+    assert payload["effective_uncompressed_context_tokens"] == 100
+    assert payload["post_semantic_context_tokens"] == 75
+    assert payload["final_context_tokens"] == 60
+    assert payload["compression_saved_tokens"] == 40
+    assert payload["structural_saved_tokens"] == 15
+    assert payload["semantic_saved_tokens"] == 25
+    assert payload["semantic_status"] == "updated"
+    assert payload["summary_generation_input_tokens"] == 100
+    assert payload["summary_generation_output_tokens"] == 40
     assert payload["provider_cache_status"] == "available"
     assert payload["provider_cache_hit"] is True
     assert payload["provider_cached_input_tokens"] == 40

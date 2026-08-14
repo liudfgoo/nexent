@@ -11,6 +11,7 @@ import type {
 import { conversationService } from "@/services/conversationService";
 import log from "@/lib/logger";
 import { parseAutomationProposal } from "@/features/agentAutomation/parseProposal";
+import { buildStreamCustomMetadata } from "./step-token-metadata";
 
 // Backend SSE chunk format
 interface ImageMetadata {
@@ -123,7 +124,8 @@ export interface Nl2aAgentDraftPayload {
 }
 
 export type Nl2aPayload =
-  Nl2aLocalMcpRecommendationPayload | Nl2aAgentDraftPayload;
+  | Nl2aLocalMcpRecommendationPayload
+  | Nl2aAgentDraftPayload;
 
 export interface Nl2aMessage {
   type: "nl2a";
@@ -213,6 +215,28 @@ export interface StepTokenCount {
   estimatedContextTokens: number;
   tokenThreshold: number | null;
   contextWindowTokens: number | null;
+  hardInputBudgetTokens: number | null;
+  contextProcessingMode: string | null;
+  compressionCalls: number | null;
+  compressionInputTokens: number | null;
+  compressionOutputTokens: number | null;
+  compressionRatio: number | null;
+  uncompressedEstTokens: number | null;
+  effectiveUncompressedContextTokens: number | null;
+  postSemanticContextTokens: number | null;
+  finalContextTokens: number | null;
+  compressionSavedTokens: number | null;
+  compressionStatsComplete: boolean | null;
+  structuralSavedTokens: number | null;
+  structuralCompactCount: number | null;
+  semanticSavedTokens: number | null;
+  semanticStatus: string | null;
+  semanticCoveredTurnCount: number | null;
+  semanticStatsComplete: boolean | null;
+  summaryGenerationInputTokens: number | null;
+  summaryGenerationOutputTokens: number | null;
+  summaryPersistStatus: string | null;
+  fallbackCompactionUsed: boolean | null;
 }
 
 /**
@@ -238,9 +262,6 @@ export interface VerificationPanelPart {
   completed: boolean;
 }
 
-// Accumulated total duration across all steps
-let accumulatedDuration = 0;
-
 /**
  * Parses a backend `token_count` payload into a `StepTokenCount` entry.
  * Returns null when the payload is malformed so callers can skip silently.
@@ -256,6 +277,28 @@ export function parseStepTokenCount(content: string): StepTokenCount | null {
       estimated_context_tokens?: number;
       token_threshold?: number | null;
       context_window_tokens?: number | null;
+      hard_input_budget_tokens?: number | null;
+      context_processing_mode?: string | null;
+      compression_calls?: number | null;
+      compression_input_tokens?: number | null;
+      compression_output_tokens?: number | null;
+      compression_ratio?: number | null;
+      uncompressed_est_tokens?: number | null;
+      effective_uncompressed_context_tokens?: number | null;
+      post_semantic_context_tokens?: number | null;
+      final_context_tokens?: number | null;
+      compression_saved_tokens?: number | null;
+      compression_stats_complete?: boolean | null;
+      structural_saved_tokens?: number | null;
+      structural_compact_count?: number | null;
+      semantic_saved_tokens?: number | null;
+      semantic_status?: string | null;
+      semantic_covered_turn_count?: number | null;
+      semantic_stats_complete?: boolean | null;
+      summary_generation_input_tokens?: number | null;
+      summary_generation_output_tokens?: number | null;
+      summary_persist_status?: string | null;
+      fallback_compaction_used?: boolean | null;
     };
     return {
       stepNumber: data.step_number ?? 0,
@@ -266,6 +309,31 @@ export function parseStepTokenCount(content: string): StepTokenCount | null {
       estimatedContextTokens: data.estimated_context_tokens ?? 0,
       tokenThreshold: data.token_threshold ?? null,
       contextWindowTokens: data.context_window_tokens ?? null,
+      hardInputBudgetTokens: data.hard_input_budget_tokens ?? null,
+      contextProcessingMode: data.context_processing_mode ?? null,
+      compressionCalls: data.compression_calls ?? null,
+      compressionInputTokens: data.compression_input_tokens ?? null,
+      compressionOutputTokens: data.compression_output_tokens ?? null,
+      compressionRatio: data.compression_ratio ?? null,
+      uncompressedEstTokens: data.uncompressed_est_tokens ?? null,
+      effectiveUncompressedContextTokens:
+        data.effective_uncompressed_context_tokens ?? null,
+      postSemanticContextTokens: data.post_semantic_context_tokens ?? null,
+      finalContextTokens: data.final_context_tokens ?? null,
+      compressionSavedTokens: data.compression_saved_tokens ?? null,
+      compressionStatsComplete: data.compression_stats_complete ?? null,
+      structuralSavedTokens: data.structural_saved_tokens ?? null,
+      structuralCompactCount: data.structural_compact_count ?? null,
+      semanticSavedTokens: data.semantic_saved_tokens ?? null,
+      semanticStatus: data.semantic_status ?? null,
+      semanticCoveredTurnCount: data.semantic_covered_turn_count ?? null,
+      semanticStatsComplete: data.semantic_stats_complete ?? null,
+      summaryGenerationInputTokens:
+        data.summary_generation_input_tokens ?? null,
+      summaryGenerationOutputTokens:
+        data.summary_generation_output_tokens ?? null,
+      summaryPersistStatus: data.summary_persist_status ?? null,
+      fallbackCompactionUsed: data.fallback_compaction_used ?? null,
     };
   } catch {
     return null;
@@ -492,7 +560,8 @@ function extractAgentRunTime(content: string): string | undefined {
   if (closeIdx < 0) return undefined;
   const raw = content.slice(AGENT_RUN_TIME_PREFIX.length, closeIdx).trim();
   // Format check: "YYYY-MM-DD HH:MM:SS" with optional timezone offset "±HHMM"
-  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}([+-]\d{4})?$/.test(raw)) return undefined;
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}([+-]\d{4})?$/.test(raw))
+    return undefined;
   return raw;
 }
 
@@ -793,9 +862,6 @@ export const conversationSourcesRegistry = new Map<string, SearchSource[]>();
 // assistant-ui only permits attachments on user messages.
 export const skillFileUploadsRegistry = new Map<string, CompleteAttachment[]>();
 
-// Global registry for step token counts (populated during streaming, consumed by UI)
-export const stepTokenCounts: StepTokenCount[] = [];
-
 // Plan data types
 export interface PlanStep {
   id: string;
@@ -982,16 +1048,6 @@ export function makeSubAgentMetadata(input: {
   };
 }
 
-/**
- * Append a parsed `StepTokenCount` to the global streaming registry.
- * Exposed so the `ChatModelAdapter.run` flow and any other writer share a
- * single insertion point. The reader side (`SingleTurnTokenUsage`) keeps
- * importing `stepTokenCounts` directly to avoid an extra re-render.
- */
-export function pushStepTokenCount(step: StepTokenCount): void {
-  stepTokenCounts.push(step);
-}
-
 let agentRunTime: string | undefined;
 
 export function getAgentRunTime(): string | undefined {
@@ -999,51 +1055,12 @@ export function getAgentRunTime(): string | undefined {
 }
 
 /**
- * Clears the global step token counts registry and resets the shared plan
- * state. Called from `remoteChatModelAdapter.run()` so a fresh assistant
- * turn never inherits the previous run's plan panel.
+ * Resets shared display state before a new run. Step token counts are kept in
+ * the run's local accumulator and therefore require no global reset.
  */
-export function clearStepTokenCounts(): void {
-  stepTokenCounts.length = 0;
-  accumulatedDuration = 0;
+function resetSharedRunState(): void {
   agentRunTime = undefined;
   planRegistry.set(null);
-}
-
-/**
- * Remote ChatModelAdapter for Nexent backend agent streaming.
-
-/**
- * Parse and build timing metadata from backend token_count chunk.
- * Also stores step data in the global registry for SingleTurnTokenUsage.
- */
-function buildTimingFromTokenCount(
-  content: string
-): ReturnType<typeof buildTimingResult> | null {
-  const parsed = parseStepTokenCount(content);
-  if (!parsed) {
-    log.warn("[ChatModelAdapter] Failed to parse token_count:", content);
-    return null;
-  }
-
-  // Store step data in global registry so the currently-streaming message's
-  // `SingleTurnTokenUsage` can render it without subscribing to per-message
-  // metadata updates.
-  pushStepTokenCount(parsed);
-
-  // Accumulate duration across all steps
-  accumulatedDuration += parsed.duration;
-
-  // Use accumulated duration for total stream time
-  const totalDuration = accumulatedDuration;
-
-  return buildTimingResult(
-    Date.now(), // streamStartTime - approximate
-    undefined, // firstTokenTime - not available
-    0, // toolCallCount - tracked separately
-    parsed.totalOutputTokens,
-    totalDuration
-  );
 }
 
 /**
@@ -1068,8 +1085,9 @@ export const remoteChatModelAdapter: ChatModelAdapter = {
     runConfig,
     unstable_threadId,
   }: ChatModelRunOptions): AsyncGenerator<ChatModelRunResult, void> {
-    // Clear step token counts from previous runs
-    clearStepTokenCounts();
+    resetSharedRunState();
+    const runStepTokenCounts: StepTokenCount[] = [];
+    let accumulatedDuration = 0;
 
     // The page layer resolves remote thread metadata to the backend conversation ID.
     // It also injects `onServerConversationId` so we can report back the id
@@ -1098,7 +1116,8 @@ export const remoteChatModelAdapter: ChatModelAdapter = {
       isNl2Agent && lastUserIndex >= 0
         ? (
             messages[lastUserIndex].metadata?.custom as
-              { nl2agentToolSelection?: Nl2AgentToolSelection } | undefined
+              | { nl2agentToolSelection?: Nl2AgentToolSelection }
+              | undefined
           )?.nl2agentToolSelection
         : undefined;
     const query = selectionMetadata
@@ -1174,7 +1193,8 @@ export const remoteChatModelAdapter: ChatModelAdapter = {
     );
 
     let agentResponse:
-      ReadableStreamDefaultReader<Uint8Array> | { type: "json"; data: unknown };
+      | ReadableStreamDefaultReader<Uint8Array>
+      | { type: "json"; data: unknown };
     try {
       agentResponse = await conversationService.runAgent(
         {
@@ -1536,15 +1556,36 @@ export const remoteChatModelAdapter: ChatModelAdapter = {
 
     // Generate a stable message ID for this stream so MarkdownText can look up sources
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const buildStreamResult = (content: any[]): ChatModelRunResult => ({
-      content: collapseSubAgentParts(content),
-      metadata: nl2a ? { custom: { nl2a } } : undefined,
-    });
+    const buildStreamResult = (content: any[]): ChatModelRunResult => {
+      const custom = buildStreamCustomMetadata(runStepTokenCounts, nl2a);
+      return {
+        content: collapseSubAgentParts(content),
+        metadata: custom ? { custom } : undefined,
+      };
+    };
 
     const streamStartTime = Date.now();
     let firstTokenTime: number | undefined;
     let toolCallCount = 0;
     let storedTiming: ReturnType<typeof buildTimingResult> | null = null;
+    const recordTokenCount = (content: string): boolean => {
+      const parsed = parseStepTokenCount(content);
+      if (!parsed) {
+        log.warn("[ChatModelAdapter] Failed to parse token_count:", content);
+        return false;
+      }
+
+      runStepTokenCounts.push(parsed);
+      accumulatedDuration += parsed.duration;
+      storedTiming = buildTimingResult(
+        Date.now(),
+        undefined,
+        0,
+        parsed.totalOutputTokens,
+        accumulatedDuration
+      );
+      return true;
+    };
 
     try {
       while (true) {
@@ -1586,10 +1627,14 @@ export const remoteChatModelAdapter: ChatModelAdapter = {
             }
           }
 
-          // Handle token_count - store timing for final yield
+          // Persist an immutable per-message snapshot immediately. Yielding
+          // here makes the token UI update even when no visible content chunk
+          // follows this internal event.
           if (chunk.type === "token_count") {
-            storedTiming = buildTimingFromTokenCount(chunk.content);
-            continue; // Don't yield for internal data chunks
+            if (recordTokenCount(chunk.content)) {
+              yield buildStreamResult(contentParts);
+            }
+            continue;
           }
 
           if (chunk.type === "plan") {
@@ -2012,6 +2057,10 @@ export const remoteChatModelAdapter: ChatModelAdapter = {
           } else if (isNl2Skill && chunk.type === "done") {
             finishNl2SkillFiles();
             yield buildStreamResult(contentParts);
+          } else if (chunk.type === "token_count") {
+            if (recordTokenCount(chunk.content)) {
+              yield buildStreamResult(contentParts);
+            }
           } else if (chunk.type === "plan") {
             const plan = parsePlan(chunk.content);
             if (plan) planRegistry.set(plan);
