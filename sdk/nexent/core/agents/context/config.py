@@ -6,6 +6,9 @@ from typing import Any, Callable, Dict, Mapping
 from .policy import PolicyLayers
 
 
+HARD_BUDGET_ENFORCEMENT_MODES = frozenset({"advisory", "strict", "disabled"})
+
+
 @dataclass
 class ContextManagerConfig:
     """Configuration for context-history compression."""
@@ -16,6 +19,10 @@ class ContextManagerConfig:
     context_window_tokens: int = 10000
     soft_input_budget_tokens: int = 0
     hard_input_budget_tokens: int = 0
+    # The hard budget is a conservative Nexent safe-input estimate, not the
+    # provider's authoritative context limit. Keep it advisory by default so
+    # estimated or operator-configured capacities cannot reject valid calls.
+    hard_budget_enforcement: str = "advisory"
     keep_recent_steps: int = 4
 
     summary_system_prompt: str = (
@@ -59,3 +66,13 @@ class ContextManagerConfig:
     policy_layers: PolicyLayers | Mapping[str, Any] = field(default_factory=PolicyLayers)
     # Narrow callback injected by Backend; SDK never imports database services.
     history_summary_sink: Callable[[Any], Any] | None = None
+
+    def __post_init__(self) -> None:
+        mode = str(self.hard_budget_enforcement).strip().lower()
+        if mode not in HARD_BUDGET_ENFORCEMENT_MODES:
+            supported = ", ".join(sorted(HARD_BUDGET_ENFORCEMENT_MODES))
+            raise ValueError(
+                f"Unsupported hard_budget_enforcement '{self.hard_budget_enforcement}'. "
+                f"Expected one of: {supported}"
+            )
+        self.hard_budget_enforcement = mode

@@ -158,6 +158,10 @@ class ContextRuntime(Protocol):
         """Effective hard input budget for this runtime."""
 
     @property
+    def hard_budget_enforcement(self) -> str:
+        """How Nexent reacts when its conservative safe input budget is exceeded."""
+
+    @property
     def processing_mode(self) -> str | None:
         """Resolved context-processing policy mode."""
 
@@ -228,6 +232,10 @@ class UnconfiguredContextRuntime:
     @property
     def hard_input_budget_tokens(self) -> int | None:
         return None
+
+    @property
+    def hard_budget_enforcement(self) -> str:
+        return "disabled"
 
     @property
     def processing_mode(self) -> str | None:

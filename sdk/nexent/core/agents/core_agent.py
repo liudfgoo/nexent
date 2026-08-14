@@ -714,13 +714,16 @@ Additional Args:
             # Don't let logging errors break the model call
             self.logger.log(f"Failed to log model call parameters: {e}", level=LogLevel.INFO)
 
-    @staticmethod
-    def _ensure_context_within_hard_budget(final_context: Any) -> None:
-        """Stop before the provider call when safe compaction cannot fit input."""
+    def _apply_context_hard_budget_policy(self, final_context: Any) -> None:
+        """Apply the configured policy for Nexent's conservative safe budget."""
         evidence = final_context.evidence
-        if evidence.over_hard_budget is True:
+        if (
+            evidence.over_hard_budget is True
+            and self.context_runtime.hard_budget_enforcement == "strict"
+        ):
             raise ValueError(
-                "Context input remains over the model hard budget after compaction: "
+                "Context input remains over the configured Nexent safe input budget "
+                "after compaction in strict mode: "
                 f"{evidence.final_token_estimate} > {evidence.hard_budget} tokens"
             )
 
@@ -750,7 +753,7 @@ Additional Args:
         self._last_context_evidence = final_context.evidence
         get_monitoring_manager().record_final_context_evidence(final_context.evidence, step_number=self.step_number)
         self._emit_history_summary_event()
-        self._ensure_context_within_hard_budget(final_context)
+        self._apply_context_hard_budget_policy(final_context)
         input_messages = final_context.messages
         chars_per_token = self.context_runtime.chars_per_token
         # Baseline for the per-step compression ratio. ``final_context.messages``
@@ -1430,7 +1433,7 @@ You have been provided with these additional arguments, that you can access usin
         self._last_context_evidence = final_context.evidence
         get_monitoring_manager().record_final_context_evidence(final_context.evidence, step_number=self.step_number)
         self._emit_history_summary_event()
-        self._ensure_context_within_hard_budget(final_context)
+        self._apply_context_hard_budget_policy(final_context)
         messages = final_context.messages
 
         # Create the final memory step with error

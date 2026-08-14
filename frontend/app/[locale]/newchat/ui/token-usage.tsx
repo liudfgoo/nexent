@@ -401,7 +401,7 @@ export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({
         >
           <Zap className="size-3 text-amber-500" />
           <span
-            className={`font-medium ${latest.isOverflow ? "text-destructive" : "text-foreground"}`}
+            className={`font-medium ${latest.isOverflow ? "text-amber-600 dark:text-amber-400" : "text-foreground"}`}
           >
             {latest.isOverflow
               ? t("chat.tokenUsage.overflow")
@@ -462,7 +462,7 @@ export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({
             </span>
             <div className="flex items-center gap-1.5">
               {latest.isOverflow && (
-                <span className="rounded bg-destructive/10 px-1.5 py-0.5 font-medium text-destructive">
+                <span className="rounded bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-600 dark:text-amber-400">
                   {t("chat.tokenUsage.overflow")}
                 </span>
               )}
@@ -474,7 +474,7 @@ export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({
           </div>
           {renderStepProgress(latest)}
           {latest.isOverflow && latest.hardBudgetTokens !== null && (
-            <div className="mt-1.5 text-xs text-destructive">
+            <div className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
               {t("chat.tokenUsage.hardInputBudgetOverflow", {
                 budget: latest.hardBudgetTokens.toLocaleString(),
                 excess: (

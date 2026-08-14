@@ -2003,15 +2003,31 @@ class TestRunStreamRealExecution:
             for name, module in original_modules.items():
                 sys.modules[name] = module
 
-    def test_rejects_context_over_hard_budget_before_model_call(self):
+    @pytest.mark.parametrize("enforcement", ["advisory", "disabled"])
+    def test_allows_context_over_safe_budget_by_default(self, enforcement):
         module = self._load_core_agent_in_isolation()
+        agent = SimpleNamespace(
+            context_runtime=SimpleNamespace(hard_budget_enforcement=enforcement)
+        )
         final_context = MagicMock()
         final_context.evidence.over_hard_budget = True
         final_context.evidence.final_token_estimate = 120
         final_context.evidence.hard_budget = 100
 
-        with pytest.raises(ValueError, match="120 > 100"):
-            module.CoreAgent._ensure_context_within_hard_budget(final_context)
+        module.CoreAgent._apply_context_hard_budget_policy(agent, final_context)
+
+    def test_rejects_context_over_safe_budget_in_strict_mode(self):
+        module = self._load_core_agent_in_isolation()
+        agent = SimpleNamespace(
+            context_runtime=SimpleNamespace(hard_budget_enforcement="strict")
+        )
+        final_context = MagicMock()
+        final_context.evidence.over_hard_budget = True
+        final_context.evidence.final_token_estimate = 120
+        final_context.evidence.hard_budget = 100
+
+        with pytest.raises(ValueError, match="safe input budget.*120 > 100"):
+            module.CoreAgent._apply_context_hard_budget_policy(agent, final_context)
 
     def test_run_stream_max_steps_path_real_execution(self):
         """Test that actually executes _run_stream and covers max_steps path lines."""
@@ -2164,12 +2180,14 @@ class TestRunStreamRealExecution:
 
         agent.context_runtime = self._context_runtime_mock()
         agent.context_runtime.chars_per_token = 1.0
+        agent.context_runtime.hard_budget_enforcement = "advisory"
         agent.context_runtime.token_counts.return_value = {
             "uncompressed": 5000,
             "compressed": 1000,
         }
         mock_context = MagicMock()
         mock_context.messages = [MagicMock()]
+        mock_context.evidence.over_hard_budget = True
         agent.context_runtime.prepare_step = MagicMock(return_value=mock_context)
 
         agent.model = MagicMock()
@@ -2190,6 +2208,7 @@ class TestRunStreamRealExecution:
             pass
 
         assert agent._last_uncompressed_est == 5000
+        agent.model.assert_called_once()
 
     def test_step_stream_falls_back_without_uncompressed_runtime_count(self):
         """_step_stream estimates messages when the runtime has no raw sample."""
@@ -3080,4 +3099,3 @@ def test_run_injects_current_time_when_missing():
 
     assert agent.task.startswith("[Current time:")
     assert "What time is it?" in agent.task
-

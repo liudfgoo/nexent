@@ -139,5 +139,9 @@ class ManagedContextRuntime:
         return self.context_manager.hard_input_budget_tokens
 
     @property
+    def hard_budget_enforcement(self) -> str:
+        return self.context_manager.config.hard_budget_enforcement
+
+    @property
     def processing_mode(self) -> str | None:
         return self.context_manager.processing_mode

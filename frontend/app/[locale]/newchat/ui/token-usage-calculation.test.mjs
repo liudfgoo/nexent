@@ -88,6 +88,21 @@ test("clamps progress widths and sanitizes invalid token values", () => {
   assert.equal(result.outputTokens, 0);
 });
 
+test("treats the streamed hard budget as an advisory overflow", () => {
+  const result = calculateStepContextUsage(
+    makeStep({
+      estimatedContextTokens: 7_500,
+      hardInputBudgetTokens: 7_000,
+      contextWindowTokens: 8_000,
+    })
+  );
+
+  assert.ok(result);
+  assert.equal(result.hardBudgetTokens, 7_000);
+  assert.equal(result.isOverflow, true);
+  assert.equal(result.inputPercent, 93.75);
+});
+
 test("returns null without steps or a valid latest context window", () => {
   assert.equal(calculateSingleTurnTokenUsage([]), null);
   assert.equal(

@@ -241,8 +241,21 @@ class ContextManager:
         hard = self._hard_input_budget_tokens()
         over_hard = final_tokens > hard
         compact_exhausted = over_hard
-        if over_hard:
-            logger.warning("Context remains over hard budget after safe compact: %s > %s", final_tokens, hard)
+        enforcement = self.config.hard_budget_enforcement
+        if over_hard and enforcement == "strict":
+            logger.warning(
+                "Context remains over the Nexent safe input budget after compaction: "
+                "%s > %s (strict mode will stop before the provider call)",
+                final_tokens,
+                hard,
+            )
+        elif over_hard and enforcement == "advisory":
+            logger.warning(
+                "Context remains over the Nexent safe input budget after compaction: "
+                "%s > %s (advisory mode; the provider will make the final context-limit decision)",
+                final_tokens,
+                hard,
+            )
 
         representations = tuple((
             item.id, str(item.metadata.get("representation", "raw"))

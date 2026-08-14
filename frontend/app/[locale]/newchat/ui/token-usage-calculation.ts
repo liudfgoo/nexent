@@ -162,7 +162,9 @@ export const calculateStepContextUsage = (
     overflow?.contextInputTokens ?? step.estimatedContextTokens
   );
   const outputTokens = normalizeTokenCount(step.stepOutputTokens);
-  const hardBudgetTokens = overflow?.hardBudgetTokens ?? null;
+  const hardBudgetTokens =
+    overflow?.hardBudgetTokens ??
+    normalizeContextWindow(step.hardInputBudgetTokens);
   const isOverflow =
     hardBudgetTokens !== null && contextInputTokens > hardBudgetTokens;
   const inputPercent = Math.min(

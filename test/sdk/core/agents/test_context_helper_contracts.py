@@ -41,6 +41,14 @@ class _Role(Enum):
     USER = "user"
 
 
+def test_hard_budget_enforcement_defaults_to_advisory_and_validates_modes():
+    assert ContextManagerConfig().hard_budget_enforcement == "advisory"
+    assert ContextManagerConfig(hard_budget_enforcement=" STRICT ").hard_budget_enforcement == "strict"
+
+    with pytest.raises(ValueError, match="Unsupported hard_budget_enforcement"):
+        ContextManagerConfig(hard_budget_enforcement="unexpected")
+
+
 def test_summary_output_normalization_and_fallback(caplog):
     assert format_summary_output("   ") is None
 
