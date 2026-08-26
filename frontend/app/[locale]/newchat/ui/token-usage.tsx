@@ -134,7 +134,7 @@ interface SingleTurnTokenUsageProps {
 }
 
 /**
- * Displays the latest step's estimated context usage relative to the model's
+ * Displays the turn's cumulative actual token usage relative to the model's
  * context window. Earlier steps remain available from the step-count tooltip.
  *
  * Data source resolution:
@@ -180,7 +180,11 @@ export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({
     latest,
     previous,
     stepCount,
+    totalInputTokens,
+    totalOutputTokens,
     totalTokensUsed,
+    totalInputPercent,
+    totalOutputPercent,
     usagePercent,
     cumulativeSavedTokens,
     summaryGenerationCostTokens,
@@ -255,6 +259,25 @@ export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({
       <div
         className="h-full bg-amber-500"
         style={{ width: `${stepUsage.outputPercent}%` }}
+      />
+    </div>
+  );
+
+  const renderTotalProgress = () => (
+    <div
+      className="flex h-3 overflow-hidden rounded-full bg-muted"
+      title={t("chat.tokenUsage.actualTokenBreakdown", {
+        input: totalInputTokens.toLocaleString(),
+        output: totalOutputTokens.toLocaleString(),
+      })}
+    >
+      <div
+        className="h-full bg-blue-500"
+        style={{ width: `${totalInputPercent}%` }}
+      />
+      <div
+        className="h-full bg-amber-500"
+        style={{ width: `${totalOutputPercent}%` }}
       />
     </div>
   );
@@ -454,7 +477,7 @@ export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({
           </button>
         </div>
 
-        {/* Latest step context usage */}
+        {/* Cumulative actual context usage */}
         <div className="mb-3">
           <div className="mb-1.5 flex justify-between text-xs">
             <span className="text-muted-foreground">
@@ -467,12 +490,12 @@ export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({
                 </span>
               )}
               <span className="font-medium text-foreground">
-                {latest.contextInputTokens.toLocaleString()} /{" "}
+                {totalTokensUsed.toLocaleString()} /{" "}
                 {latest.contextWindowTokens.toLocaleString()}
               </span>
             </div>
           </div>
-          {renderStepProgress(latest)}
+          {renderTotalProgress()}
           {latest.isOverflow && latest.hardBudgetTokens !== null && (
             <div className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
               {t("chat.tokenUsage.hardInputBudgetOverflow", {
@@ -560,42 +583,34 @@ export const SingleTurnTokenUsage: FC<SingleTurnTokenUsageProps> = ({
           )}
         </div>
 
-        {/* Step details */}
-        <div className="space-y-2 text-xs">
-          <div className="flex items-center justify-between border-t border-border pt-2">
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <span className="font-medium">
-                {t("chat.tokenUsage.actualTokensTotal")}
-              </span>
-            </span>
-            <span className="font-medium text-foreground">
-              {totalTokensUsed.toLocaleString()}
-            </span>
+        {/* Turn details */}
+        {(cumulativeSavedTokens > 0 || summaryGenerationCostTokens > 0) && (
+          <div className="space-y-2 border-t border-border pt-2 text-xs">
+            {cumulativeSavedTokens > 0 && (
+              <div
+                className="flex items-center justify-between"
+                title={t("chat.tokenUsage.cumulativeSavedHelp")}
+              >
+                <span className="font-medium text-muted-foreground">
+                  {t("chat.tokenUsage.cumulativeSaved")}
+                </span>
+                <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                  {cumulativeSavedTokens.toLocaleString()} Token
+                </span>
+              </div>
+            )}
+            {summaryGenerationCostTokens > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-muted-foreground">
+                  {t("chat.tokenUsage.summaryGenerationCost")}
+                </span>
+                <span className="font-medium text-foreground">
+                  {summaryGenerationCostTokens.toLocaleString()} Token
+                </span>
+              </div>
+            )}
           </div>
-          {cumulativeSavedTokens > 0 && (
-            <div
-              className="flex items-center justify-between"
-              title={t("chat.tokenUsage.cumulativeSavedHelp")}
-            >
-              <span className="font-medium text-muted-foreground">
-                {t("chat.tokenUsage.cumulativeSaved")}
-              </span>
-              <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                {cumulativeSavedTokens.toLocaleString()} Token
-              </span>
-            </div>
-          )}
-          {summaryGenerationCostTokens > 0 && (
-            <div className="flex items-center justify-between">
-              <span className="font-medium text-muted-foreground">
-                {t("chat.tokenUsage.summaryGenerationCost")}
-              </span>
-              <span className="font-medium text-foreground">
-                {summaryGenerationCostTokens.toLocaleString()} Token
-              </span>
-            </div>
-          )}
-        </div>
+        )}
       </PopoverContent>
     </Popover>
   );

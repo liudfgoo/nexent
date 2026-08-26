@@ -259,7 +259,7 @@
   "chat.tokenUsage.statsIncomplete": "不含旧摘要的历史节省",
   "chat.tokenUsage.compressionNotEnabled": "未启用压缩",
   "chat.tokenUsage.compressionNotTriggered": "未触发压缩",
-  "chat.tokenUsage.actualTokensTotal": "实际 Token 累计",
+  "chat.tokenUsage.actualTokenBreakdown": "累计输入 {{input}}，累计输出 {{output}}",
   "chat.tokenUsage.cumulativeSaved": "本轮累计少发送",
   "chat.tokenUsage.cumulativeSavedHelp": "按每次模型调用分别计算；重复携带的上下文会在每个 Step 分别计入。",
   "chat.tokenUsage.summaryGenerationCost": "语义摘要生成开销",

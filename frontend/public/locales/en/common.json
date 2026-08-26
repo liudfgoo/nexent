@@ -259,7 +259,7 @@
   "chat.tokenUsage.statsIncomplete": "excludes legacy-summary savings",
   "chat.tokenUsage.compressionNotEnabled": "Compression is not enabled",
   "chat.tokenUsage.compressionNotTriggered": "Compression was not triggered",
-  "chat.tokenUsage.actualTokensTotal": "Actual token total",
+  "chat.tokenUsage.actualTokenBreakdown": "Cumulative input {{input}}, cumulative output {{output}}",
   "chat.tokenUsage.cumulativeSaved": "Cumulative avoided input",
   "chat.tokenUsage.cumulativeSavedHelp": "Calculated per model call; repeated context is counted separately for every step.",
   "chat.tokenUsage.summaryGenerationCost": "Semantic-summary generation cost",

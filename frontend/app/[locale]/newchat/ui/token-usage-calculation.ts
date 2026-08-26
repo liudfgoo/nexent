@@ -41,7 +41,11 @@ export interface SingleTurnTokenUsageCalculation {
   latest: StepContextUsage;
   previous: StepContextUsage[];
   stepCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
   totalTokensUsed: number;
+  totalInputPercent: number;
+  totalOutputPercent: number;
   usagePercent: number;
   cumulativeSavedTokens: number;
   summaryGenerationCostTokens: number;
@@ -218,21 +222,35 @@ export const calculateSingleTurnTokenUsage = (
     .map((step) => calculateStepContextUsage(step, latestContextWindowTokens))
     .filter((step): step is StepContextUsage => step !== null);
 
-  const totalTokensUsed = steps.reduce(
-    (sum, step) =>
-      sum +
-      normalizeTokenCount(step.stepInputTokens) +
-      normalizeTokenCount(step.stepOutputTokens),
+  const totalInputTokens = steps.reduce(
+    (sum, step) => sum + normalizeTokenCount(step.stepInputTokens),
     0
+  );
+  const totalOutputTokens = steps.reduce(
+    (sum, step) => sum + normalizeTokenCount(step.stepOutputTokens),
+    0
+  );
+  const totalTokensUsed = totalInputTokens + totalOutputTokens;
+  const totalInputPercent = Math.min(
+    (totalInputTokens / latest.contextWindowTokens) * 100,
+    100
+  );
+  const totalOutputPercent = Math.min(
+    (totalOutputTokens / latest.contextWindowTokens) * 100,
+    Math.max(0, 100 - totalInputPercent)
   );
 
   return {
     latest,
     previous,
     stepCount: steps.length,
+    totalInputTokens,
+    totalOutputTokens,
     totalTokensUsed,
+    totalInputPercent,
+    totalOutputPercent,
     usagePercent: Math.round(
-      (latest.contextInputTokens / latest.contextWindowTokens) * 100
+      (totalTokensUsed / latest.contextWindowTokens) * 100
     ),
     cumulativeSavedTokens: [latest, ...previous].reduce(
       (sum, stepUsage) => sum + (stepUsage.compression?.savedTokens ?? 0),

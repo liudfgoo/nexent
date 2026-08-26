@@ -41,7 +41,7 @@ const makeStep = (overrides = {}) => ({
   ...overrides,
 });
 
-test("uses the latest estimated context for the headline ratio", () => {
+test("uses cumulative actual tokens for the headline ratio", () => {
   const result = calculateSingleTurnTokenUsage([
     makeStep(),
     makeStep({
@@ -53,10 +53,14 @@ test("uses the latest estimated context for the headline ratio", () => {
   ]);
 
   assert.ok(result);
-  assert.equal(result.usagePercent, 40);
+  assert.equal(result.usagePercent, 60);
   assert.equal(result.latest.contextInputTokens, 3_200);
   assert.equal(result.latest.contextWindowTokens, 8_000);
+  assert.equal(result.totalInputTokens, 4_500);
+  assert.equal(result.totalOutputTokens, 300);
   assert.equal(result.totalTokensUsed, 4_800);
+  assert.equal(result.totalInputPercent, 56.25);
+  assert.equal(result.totalOutputPercent, 3.75);
   assert.equal(result.previous.length, 1);
   assert.equal(result.previous[0].inputPercent, 15);
   assert.equal(result.previous[0].outputPercent, 1.25);
@@ -158,8 +162,16 @@ test("uses the failed step overflow estimate instead of its zero token count", (
   assert.equal(result.latest.contextWindowTokens, 32_768);
   assert.equal(result.latest.hardBudgetTokens, 21_299);
   assert.equal(result.latest.isOverflow, true);
-  assert.equal(result.usagePercent, 74);
+  assert.equal(result.usagePercent, 146);
+  assert.equal(result.totalInputTokens, 31_107);
+  assert.equal(result.totalOutputTokens, 16_714);
   assert.equal(result.totalTokensUsed, 47_821);
+  assert.ok(
+    Math.abs(result.totalInputPercent - 94.9310302734375) < Number.EPSILON
+  );
+  assert.ok(
+    Math.abs(result.totalOutputPercent - 5.0689697265625) < Number.EPSILON
+  );
   assert.equal(result.previous.length, 4);
 });
 
